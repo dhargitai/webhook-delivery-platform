@@ -37,6 +37,9 @@
     "libs/core": {
       "name": "@wdp/core",
       "version": "0.0.1",
+      "dependencies": {
+        "@wdp/domain": "workspace:*",
+      },
     },
     "libs/domain": {
       "name": "@wdp/domain",

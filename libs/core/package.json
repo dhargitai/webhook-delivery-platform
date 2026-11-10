@@ -14,5 +14,8 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@wdp/domain": "workspace:*"
   }
 }

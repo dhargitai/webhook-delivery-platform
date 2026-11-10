@@ -1,7 +1,8 @@
 import { defineConfig } from 'vitest/config';
+import { workspaceAliases } from './vitest.aliases.js';
 
 export default defineConfig({
-  resolve: { tsconfigPaths: true },
+  resolve: { alias: workspaceAliases },
   test: {
     globals: true,
     root: './',
