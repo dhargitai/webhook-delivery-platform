@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "incremental": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "types": ["vitest/globals", "node"],
+    // Dev and test resolve workspace libraries straight to their sources, so no
+    // rebuild is needed while editing. Production builds override this with
+    // `"paths": {}` and resolve through node_modules to each lib's compiled dist.
+    "paths": {
+      "@wdp/domain": ["./libs/domain/src/index.ts"],
+      "@wdp/core": ["./libs/core/src/index.ts"],
+      "@wdp/messaging": ["./libs/messaging/src/index.ts"],
+      "@wdp/observability": ["./libs/observability/src/index.ts"]
+    }
+  }
+}
