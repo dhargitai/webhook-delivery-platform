@@ -1,1 +1,1 @@
-export {};
+export { requestHash } from './request-hash.js';
