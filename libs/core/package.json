@@ -16,6 +16,7 @@
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@wdp/domain": "workspace:*"
+    "@wdp/domain": "workspace:*",
+    "ioredis": "^6.0.0"
   }
 }

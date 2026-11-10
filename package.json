@@ -18,13 +18,15 @@
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
-    "test:e2e": "vitest run --config ./vitest.config.e2e.ts"
+    "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
+    "test:integration": "vitest run --config ./vitest.config.integration.ts"
   },
   "devDependencies": {
     "@nestjs/cli": "^12.0.0",
     "@nestjs/mau": "^0.2.6",
     "@nestjs/schematics": "^12.0.0",
     "@nestjs/testing": "^12.0.1",
+    "@testcontainers/redis": "^12.2.1",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.0.0",
