@@ -99,7 +99,8 @@ The four libraries are empty placeholders. The remaining apps (relay, dispatcher
 
 ### How workspace libraries resolve
 
-- **Dev and tests:** `@wdp/*` resolves to each library's `src` through the paths in `tsconfig.base.json`, so no rebuild is needed while editing.
+- **Dev and typechecking:** `@wdp/*` resolves to each library's `src` through the paths in `tsconfig.base.json`, so no rebuild is needed while editing.
+- **Tests:** Vitest aliases `@wdp/*` to each library's `src` explicitly (`vitest.aliases.ts`). The tsconfig paths are not used, because a lib's build tsconfig empties them and its sources would otherwise load a sibling lib from `dist` while specs load `src`, giving two module copies.
 - **Builds:** the build tsconfigs set `"paths": {}`, so imports resolve through `node_modules` to each library's compiled `dist`. `bun run build` builds everything in dependency order.
 - **Linking:** an app only gets a library linked once its `package.json` lists it, for example `"@wdp/core": "workspace:*"`, followed by `bun install`.
 

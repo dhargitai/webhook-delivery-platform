@@ -1,4 +1,5 @@
 export { requestHash } from './request-hash.js';
+export { LaneRouter } from './lane-router.js';
 export {
   EventIdGenerator,
   EventStore,
