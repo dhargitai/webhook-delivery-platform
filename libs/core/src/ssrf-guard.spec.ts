@@ -307,3 +307,51 @@ describe('SsrfGuard.lookup', () => {
     );
   });
 });
+
+describe('SsrfGuard.blockedHostReason', () => {
+  const guard = new SsrfGuard({
+    resolve: () =>
+      Promise.reject(new Error('a literal host must not be resolved')),
+  });
+
+  it.each([
+    ['127.0.0.1', /loopback/],
+    ['169.254.169.254', /link-local/],
+    ['10.1.2.3', /private network/],
+    ['::1', /loopback/],
+    ['fd00::1', /unique local/],
+    ['::ffff:10.0.0.1', /private network/],
+  ])('refuses the literal host %s', (hostname, reason) => {
+    const refusal = guard.blockedHostReason(hostname);
+
+    expect(refusal).toContain(hostname);
+    expect(refusal).toMatch(reason);
+  });
+
+  it.each(['93.184.216.34', '2606:4700::1111', '::ffff:93.184.216.34'])(
+    'lets the public literal host %s through',
+    (hostname) => {
+      expect(guard.blockedHostReason(hostname)).toBeUndefined();
+    },
+  );
+
+  it.each(['example.com', 'mock-receiver', 'localhost', '10.example.com'])(
+    'leaves the name %s to the lookup, which resolves it',
+    (hostname) => {
+      expect(guard.blockedHostReason(hostname)).toBeUndefined();
+    },
+  );
+
+  it('lets an allowlisted literal host through', () => {
+    const allowing = new SsrfGuard({ allowHosts: ['127.0.0.1'] });
+
+    expect(allowing.blockedHostReason('127.0.0.1')).toBeUndefined();
+    expect(allowing.blockedHostReason('127.0.0.2')).toMatch(/loopback/);
+  });
+
+  it('matches an allowlisted literal host without regard to case', () => {
+    const allowing = new SsrfGuard({ allowHosts: ['fd00::ABCD'] });
+
+    expect(allowing.blockedHostReason('FD00::abcd')).toBeUndefined();
+  });
+});

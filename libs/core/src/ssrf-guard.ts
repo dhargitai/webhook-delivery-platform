@@ -191,6 +191,19 @@ export class SsrfGuard {
     );
   };
 
+  /**
+   * Why a host that is itself an IP address must be refused, or `undefined`.
+   * Node never calls `lookup` for such a host (there is nothing to resolve), so
+   * without this check `https://169.254.169.254/` would go straight through.
+   * A name is left to `lookup`, which sees what it resolves to.
+   */
+  blockedHostReason(hostname: string): string | undefined {
+    if (isIP(hostname) === 0) return undefined;
+    if (this.allowHosts.has(hostname.toLowerCase())) return undefined;
+    const reason = isBlockedAddress(hostname);
+    return reason === undefined ? undefined : `${hostname} is ${reason}`;
+  }
+
   /** The addresses of the host, all of them checked. Throws if any is blocked. */
   private async resolveChecked(
     hostname: string,
