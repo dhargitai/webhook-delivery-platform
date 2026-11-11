@@ -98,3 +98,101 @@ describe('RetryPolicy.next jitter', () => {
     expect(policy.next(8, rng)).toEqual({ action: 'dead' });
   });
 });
+
+describe('RetryPolicy time scale and floor', () => {
+  const MIDDLE = () => 0.5;
+
+  function delays(policy: RetryPolicy, rng: () => number = MIDDLE) {
+    return [1, 2, 3, 4, 5, 6, 7].map((attempt) => {
+      const decision = policy.next(attempt, rng);
+      return decision.action === 'retry' ? decision.delay : undefined;
+    });
+  }
+
+  it('compresses the schedule for the demo: scale 30, floor 500 ms', () => {
+    const policy = new RetryPolicy({ timeScale: 30, minDelayMs: 500 });
+
+    // 0.5 s, 1 s, 10 s, 1 min, 4 min, 10 min, 20 min. The first tier would
+    // be 167 ms without the floor.
+    expect(delays(policy)).toEqual([
+      500, 1_000, 10_000, 60_000, 240_000, 600_000, 1_200_000,
+    ]);
+  });
+
+  it('compresses the schedule for tests: scale 1000, floor 20 ms', () => {
+    const policy = new RetryPolicy({ timeScale: 1000, minDelayMs: 20 });
+
+    expect(delays(policy)).toEqual([20, 30, 300, 1_800, 7_200, 18_000, 36_000]);
+  });
+
+  it('floors every jitter bucket of a tier that scales below the floor', () => {
+    const policy = new RetryPolicy({ timeScale: 1000, minDelayMs: 20 });
+
+    // 4, 5 and 6 ms scaled, so all three buckets share one effective delay.
+    expect([0, 0.5, 0.9].map((r) => policy.next(1, () => r))).toEqual([
+      { action: 'retry', delay: 20, tier: 0, bucket: 0 },
+      { action: 'retry', delay: 20, tier: 0, bucket: 1 },
+      { action: 'retry', delay: 20, tier: 0, bucket: 2 },
+    ]);
+  });
+
+  it.each([
+    [3, 1_667], // 1666.67 rounds up
+    [7, 714], // 714.29 rounds down
+  ])('rounds a scaled delay to whole ms (scale %i)', (timeScale, delay) => {
+    const policy = new RetryPolicy({ timeScale });
+
+    expect(policy.next(1, MIDDLE)).toEqual({
+      action: 'retry',
+      delay,
+      tier: 0,
+      bucket: 1,
+    });
+  });
+
+  it('scales the jittered delay, not the base', () => {
+    const policy = new RetryPolicy({ timeScale: 10 });
+
+    expect(policy.next(1, () => 0.9)).toMatchObject({ delay: 600 });
+  });
+
+  it('lets a floor above the delay win', () => {
+    const policy = new RetryPolicy({ minDelayMs: 10_000 });
+
+    expect(policy.next(1, MIDDLE)).toMatchObject({ delay: 10_000 });
+    expect(policy.next(3, MIDDLE)).toMatchObject({ delay: 300_000 });
+  });
+
+  it('leaves the schedule alone by default', () => {
+    expect(delays(new RetryPolicy({}))).toEqual(delays(new RetryPolicy()));
+    expect(delays(new RetryPolicy())).toEqual([
+      5_000, 30_000, 300_000, 1_800_000, 7_200_000, 18_000_000, 36_000_000,
+    ]);
+  });
+
+  it('keeps tier, bucket and the budget when scaled', () => {
+    const policy = new RetryPolicy({ timeScale: 1000, minDelayMs: 20 });
+
+    expect(policy.next(7, () => 0.9)).toEqual({
+      action: 'retry',
+      delay: 43_200,
+      tier: 6,
+      bucket: 2,
+    });
+    expect(policy.next(8, MIDDLE)).toEqual({ action: 'dead' });
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses a time scale of %s',
+    (timeScale) => {
+      expect(() => new RetryPolicy({ timeScale })).toThrow(RangeError);
+    },
+  );
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses a minimum delay of %s',
+    (minDelayMs) => {
+      expect(() => new RetryPolicy({ minDelayMs })).toThrow(RangeError);
+    },
+  );
+});

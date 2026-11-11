@@ -23,7 +23,11 @@ export {
   type GeneratedApiKey,
 } from './api-key.js';
 export { SignatureService } from './signature-service.js';
-export { RetryPolicy, type RetryDecision } from './retry-policy.js';
+export {
+  RetryPolicy,
+  type RetryDecision,
+  type RetryPolicyOptions,
+} from './retry-policy.js';
 export {
   EventIdGenerator,
   EventStore,

@@ -24,11 +24,42 @@ export type RetryDecision =
   | { action: 'retry'; delay: number; tier: number; bucket: number }
   | { action: 'dead' };
 
+export interface RetryPolicyOptions {
+  /**
+   * Divides every delay, to compress the schedule for demos and tests
+   * (`TIME_SCALE`: 1 in production, 30 for the demo, 1000 in tests).
+   */
+  timeScale?: number;
+  /**
+   * No delay is shorter than this many ms, however large the scale: the PRD
+   * uses 500 ms for the demo and 20 ms for the tests. Applied after scaling.
+   */
+  minDelayMs?: number;
+}
+
 /**
  * Decides what happens to a delivery after a failed attempt: which retry tier
  * it waits in, or that its attempt budget is spent. Pure: no clock, no I/O.
  */
 export class RetryPolicy {
+  private readonly timeScale: number;
+  private readonly minDelayMs: number;
+
+  constructor({ timeScale = 1, minDelayMs = 0 }: RetryPolicyOptions = {}) {
+    if (!Number.isFinite(timeScale) || timeScale <= 0) {
+      throw new RangeError(
+        `timeScale must be a positive finite number, got ${timeScale}`,
+      );
+    }
+    if (!Number.isInteger(minDelayMs) || minDelayMs < 0) {
+      throw new RangeError(
+        `minDelayMs must be a non-negative integer, got ${minDelayMs}`,
+      );
+    }
+    this.timeScale = timeScale;
+    this.minDelayMs = minDelayMs;
+  }
+
   /**
    * `attempt` is the 1-based number of the attempt that just failed. `delay`
    * is in ms. `rng` returns a number in [0, 1) and picks the jitter bucket; it
@@ -49,7 +80,12 @@ export class RetryPolicy {
     const { bucket, percent } = pickBucket(rng);
     return {
       action: 'retry',
-      delay: (delay * percent) / 100,
+      // One rounding at the end: the scaled delay is a whole number of ms, as
+      // queue names and TTLs need.
+      delay: Math.max(
+        this.minDelayMs,
+        Math.round((delay * percent) / 100 / this.timeScale),
+      ),
       tier,
       bucket,
     };
