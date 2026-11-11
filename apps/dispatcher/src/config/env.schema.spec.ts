@@ -14,6 +14,8 @@ describe('dispatcher env schema', () => {
       LANE_COUNT: 4,
       DISPATCHER_PREFETCH: 20,
       DISPATCHER_CONFIRM_TIMEOUT_MS: 5000,
+      DISPATCHER_RETRY_DELAY_MS: 5000,
+      DISPATCHER_MAX_ATTEMPTS: 10,
     });
   });
 
@@ -41,6 +43,12 @@ describe('dispatcher env schema', () => {
     {
       name: 'a confirm timeout of 0',
       env: { DISPATCHER_CONFIRM_TIMEOUT_MS: '0' },
+    },
+    { name: 'a retry delay of 0', env: { DISPATCHER_RETRY_DELAY_MS: '0' } },
+    { name: 'zero max attempts', env: { DISPATCHER_MAX_ATTEMPTS: '0' } },
+    {
+      name: 'fractional max attempts',
+      env: { DISPATCHER_MAX_ATTEMPTS: '2.5' },
     },
     { name: 'a non-numeric lane count', env: { LANE_COUNT: 'many' } },
   ])('rejects $name', ({ env }) => {

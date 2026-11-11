@@ -19,6 +19,8 @@ export interface PublishProperties {
   correlationId?: string;
   /** Message type name, for consumers that route on it. */
   type?: string;
+  /** Custom headers, such as an attempt counter that survives dead-lettering. */
+  headers?: Record<string, unknown>;
 }
 
 export interface ConfirmPublisherOptions {
@@ -81,7 +83,7 @@ export class ConfirmPublisher {
     exchange: string,
     routingKey: string,
     body: Buffer,
-    { messageId, correlationId, type }: PublishProperties,
+    { messageId, correlationId, type, headers }: PublishProperties,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
@@ -101,6 +103,7 @@ export class ConfirmPublisher {
             messageId,
             correlationId,
             type,
+            headers,
           },
           (error) => {
             clearTimeout(timer);

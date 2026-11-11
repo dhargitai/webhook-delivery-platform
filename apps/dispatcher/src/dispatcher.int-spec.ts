@@ -14,11 +14,15 @@ import {
   BrokerConnection,
   ConfirmPublisher,
   Consumer,
+  declareDispatchRetryTopology,
   declareTopology,
   decodeMessage,
   deliveryRequestedSchema,
+  DISPATCH_EXHAUSTED,
   encodeMessage,
   EVENT_PUBLISHED_ROUTING_KEY,
+  FAILURE_KIND_HEADER,
+  FAILURE_REASON_HEADER,
   MalformedMessageError,
   type TopologyNames,
 } from '@wdp/messaging';
@@ -26,13 +30,44 @@ import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import type { Kysely } from 'kysely';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { BrokerDeliveryPublisher } from './broker-delivery-publisher.js';
+import { BrokerDispatchRetryPublisher } from './broker-dispatch-retry-publisher.js';
+import { DispatchFailureHandler } from './dispatch-failure-handler.js';
 import { EventMessageHandler } from './event-message-handler.js';
 
 const LANES = 4;
+const RETRY_DELAY_MS = 200;
+const MAX_ATTEMPTS = 3;
 
 class RefusingPublisher extends DeliveryPublisher {
   async publish(_job: DeliveryJob): Promise<void> {
     throw new Error('broker refused the job');
+  }
+}
+
+/**
+ * Fails the publishes `shouldFail` says to, and passes the rest on to the real
+ * publisher. Records when each publish was tried.
+ */
+class FlakyPublisher extends DeliveryPublisher {
+  readonly attempts: { endpointId: string; at: number }[] = [];
+
+  constructor(
+    private readonly real: DeliveryPublisher,
+    private readonly shouldFail: (
+      job: DeliveryJob,
+      attemptsSoFar: number,
+    ) => boolean,
+  ) {
+    super();
+  }
+
+  async publish(job: DeliveryJob, routingKey: string): Promise<void> {
+    const before = this.attempts.length;
+    this.attempts.push({ endpointId: job.endpointId, at: Date.now() });
+    if (this.shouldFail(job, before)) {
+      throw new Error('broker confirm timed out');
+    }
+    await this.real.publish(job, routingKey);
   }
 }
 
@@ -102,24 +137,50 @@ describe('dispatcher (real Postgres and RabbitMQ)', () => {
     lanes(): Promise<{ lane: number; messageId: string; body: unknown }[]>;
     count(queue: string): Promise<number>;
     dead(): Promise<Buffer[]>;
+    /** Like `dead()`, but with the headers the dispatcher left on each message. */
+    deadWithHeaders(): Promise<
+      { body: unknown; headers: Record<string, unknown> }[]
+    >;
   }
 
-  async function setUp({ refuseJobs = false } = {}): Promise<Setup> {
+  async function setUp({
+    refuseJobs = false,
+    flaky,
+  }: {
+    refuseJobs?: boolean;
+    /** Wraps the real publisher, to fail some publishes. */
+    flaky?: (real: DeliveryPublisher) => DeliveryPublisher;
+  } = {}): Promise<Setup> {
     const namespace = testingNamespace();
-    const names = await declareTopology(await conn.createChannel(), {
+    const setupChannel = await conn.createChannel();
+    const names = await declareTopology(setupChannel, {
       laneCount: LANES,
+      namespace,
+    });
+    await declareDispatchRetryTopology(setupChannel, {
+      delayMs: RETRY_DELAY_MS,
       namespace,
     });
     const deliveries = new ConfirmPublisher(await conn.createConfirmChannel());
     const events = new ConfirmPublisher(await conn.createConfirmChannel());
-    const handler = new EventMessageHandler(
-      new Dispatcher(
-        new KyselySubscriptionLookup(db),
-        refuseJobs
-          ? new RefusingPublisher()
-          : new BrokerDeliveryPublisher(deliveries, names),
-        router,
+    const handler = new DispatchFailureHandler(
+      new EventMessageHandler(
+        new Dispatcher(
+          new KyselySubscriptionLookup(db),
+          refuseJobs
+            ? new RefusingPublisher()
+            : (flaky ?? ((real) => real))(
+                new BrokerDeliveryPublisher(deliveries, names),
+              ),
+          router,
+        ),
       ),
+      new BrokerDispatchRetryPublisher(deliveries, names, RETRY_DELAY_MS),
+      {
+        maxAttempts: MAX_ATTEMPTS,
+        onRetryScheduled: () => undefined,
+        onExhausted: () => undefined,
+      },
     );
     const handlerErrors: unknown[] = [];
 
@@ -188,6 +249,12 @@ describe('dispatcher (real Postgres and RabbitMQ)', () => {
       },
       async dead() {
         return (await read(names.deadLetterQueue)).map((m) => m.content);
+      },
+      async deadWithHeaders() {
+        return (await read(names.deadLetterQueue)).map((m) => ({
+          body: JSON.parse(m.content.toString()) as unknown,
+          headers: m.properties.headers ?? {},
+        }));
       },
     };
   }
@@ -302,7 +369,88 @@ describe('dispatcher (real Postgres and RabbitMQ)', () => {
     expect(jobs[0]?.body).toMatchObject({ endpointId: late });
   });
 
-  it('dead-letters an event when the broker refuses its jobs, keeping the original message', async () => {
+  it('dispatches an event to every endpoint after a transient publish failure, without manual action', async () => {
+    const tenantId = await createTenant();
+    const endpoints = [
+      await addEndpoint(tenantId, ['invoice.paid']),
+      await addEndpoint(tenantId, ['invoice.paid']),
+    ];
+    let flakyPublisher: FlakyPublisher | undefined;
+    const setup = await setUp({
+      // Every publish of the first pass fails once, as in a confirm timeout.
+      flaky: (real) =>
+        (flakyPublisher = new FlakyPublisher(
+          real,
+          (_job, attemptsSoFar) => attemptsSoFar < 2,
+        )),
+    });
+    await setup.startConsumer();
+    const event = eventFor(tenantId);
+
+    await setup.sendEvent(event);
+
+    const jobs = await jobsOnLanes(setup, 2);
+    expect(jobs.map((j) => j.messageId).sort()).toEqual(
+      endpoints.map((id) => deliveryId(event.eventId, id)).sort(),
+    );
+    expect(flakyPublisher?.attempts.length).toBeGreaterThan(2);
+    expect(await setup.count(setup.names.deadLetterQueue)).toBe(0);
+  });
+
+  it('sends the already sent jobs again under the same ids and adds none, after a partial failure', async () => {
+    const tenantId = await createTenant();
+    const healthy = await addEndpoint(tenantId, ['invoice.paid']);
+    const unlucky = await addEndpoint(tenantId, ['invoice.paid']);
+    let unluckyFailed = false;
+    const setup = await setUp({
+      // The unlucky endpoint's job fails on the first pass only.
+      flaky: (real) =>
+        new FlakyPublisher(real, (job) => {
+          const fail = job.endpointId === unlucky && !unluckyFailed;
+          unluckyFailed ||= fail;
+          return fail;
+        }),
+    });
+    await setup.startConsumer();
+    const event = eventFor(tenantId);
+
+    await setup.sendEvent(event);
+
+    // First pass: the healthy job. Second pass: both jobs, the healthy one again.
+    const jobs = await jobsOnLanes(setup, 3);
+    const healthyId = deliveryId(event.eventId, healthy);
+    const unluckyId = deliveryId(event.eventId, unlucky);
+    expect(jobs.map((j) => j.messageId).sort()).toEqual(
+      [healthyId, healthyId, unluckyId].sort(),
+    );
+    expect(await setup.count(setup.names.deadLetterQueue)).toBe(0);
+  });
+
+  it('waits the retry delay between attempts instead of spinning on a failing event', async () => {
+    const tenantId = await createTenant();
+    await addEndpoint(tenantId, ['invoice.paid']);
+    let flakyPublisher: FlakyPublisher | undefined;
+    const setup = await setUp({
+      flaky: (real) => (flakyPublisher = new FlakyPublisher(real, () => true)),
+    });
+    await setup.startConsumer();
+
+    await setup.sendEvent(eventFor(tenantId));
+
+    await eventually(async () => {
+      expect(await setup.count(setup.names.deadLetterQueue)).toBe(1);
+    });
+    const times = flakyPublisher?.attempts.map((a) => a.at) ?? [];
+    expect(times).toHaveLength(MAX_ATTEMPTS);
+    for (let i = 1; i < times.length; i++) {
+      // A little slack for timer granularity, none for a missing pause.
+      expect((times[i] ?? 0) - (times[i - 1] ?? 0)).toBeGreaterThanOrEqual(
+        RETRY_DELAY_MS - 50,
+      );
+    }
+  });
+
+  it('dead-letters an event whose dispatch keeps failing, once, with the reason and the original body', async () => {
     const tenantId = await createTenant();
     await addEndpoint(tenantId, ['invoice.paid']);
     const setup = await setUp({ refuseJobs: true });
@@ -314,10 +462,19 @@ describe('dispatcher (real Postgres and RabbitMQ)', () => {
     await eventually(async () => {
       expect(await setup.count(setup.names.deadLetterQueue)).toBe(1);
     });
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * 2));
     expect(await setup.count(setup.names.dispatchQueue)).toBe(0);
-    const [dead] = await setup.dead();
-    expect(JSON.parse(String(dead))).toMatchObject({ eventId: event.eventId });
-    expect(setup.handlerErrors).toHaveLength(1);
+    expect(await setup.lanes()).toEqual([]);
+    const dead = await setup.deadWithHeaders();
+    expect(dead).toHaveLength(1);
+    expect(dead[0]?.body).toMatchObject({ eventId: event.eventId });
+    expect(dead[0]?.headers).toMatchObject({
+      [FAILURE_KIND_HEADER]: DISPATCH_EXHAUSTED,
+      [FAILURE_REASON_HEADER]:
+        '1 of 1 delivery jobs could not be published: broker refused the job',
+    });
+    // Handled, not thrown: the consumer saw no error.
+    expect(setup.handlerErrors).toEqual([]);
   });
 
   it('dead-letters a message that is not a valid event instead of retrying it', async () => {
@@ -332,6 +489,10 @@ describe('dispatcher (real Postgres and RabbitMQ)', () => {
     expect(await setup.count(setup.names.dispatchQueue)).toBe(0);
     expect(setup.handlerErrors).toHaveLength(1);
     expect(setup.handlerErrors[0]).toBeInstanceOf(MalformedMessageError);
+    // Straight to the DLQ: it never waited in the retry queue.
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * 2));
+    expect(await setup.count(setup.names.dispatchQueue)).toBe(0);
+    expect(await setup.count(setup.names.deadLetterQueue)).toBe(1);
   });
 
   it('redelivers an event whose dispatcher died before acking, with the same job ids', async () => {

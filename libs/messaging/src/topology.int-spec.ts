@@ -1,9 +1,14 @@
 import { laneRoutingKey } from '@wdp/domain';
+import type { GetMessage } from 'amqplib';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { BrokerConnection } from './connection.js';
 import { EVENT_PUBLISHED_ROUTING_KEY } from './names.js';
-import { testingNamespace } from './testing/helpers.js';
-import { declareEventTopology, declareTopology } from './topology.js';
+import { eventually, testingNamespace } from './testing/helpers.js';
+import {
+  declareDispatchRetryTopology,
+  declareEventTopology,
+  declareTopology,
+} from './topology.js';
 
 describe('declareTopology (real RabbitMQ)', () => {
   let conn: BrokerConnection;
@@ -154,6 +159,95 @@ describe('declareTopology (real RabbitMQ)', () => {
     const missing = await conn.createChannel();
     await expect(missing.checkQueue(names.laneQueue(3))).rejects.toThrow(
       /NOT_FOUND/,
+    );
+  });
+
+  describe('the dispatch retry queue', () => {
+    it('hands a parked event back to the dispatch queue after its delay, unchanged', async () => {
+      const namespace = testingNamespace();
+      const channel = await conn.createChannel();
+      const names = await declareEventTopology(channel, { namespace });
+      const delayMs = 300;
+      await declareDispatchRetryTopology(channel, { namespace, delayMs });
+
+      const publisher = await conn.createConfirmChannel();
+      const parkedAt = Date.now();
+      publisher.publish(
+        '',
+        names.dispatchRetryQueue(delayMs),
+        Buffer.from('parked'),
+        {
+          persistent: true,
+          messageId: 'evt-1',
+          headers: { 'x-dispatch-attempt': 2 },
+        },
+      );
+      await publisher.waitForConfirms();
+
+      const consumer = await conn.createChannel();
+      expect(await consumer.get(names.dispatchQueue, { noAck: true })).toBe(
+        false,
+      );
+      let message: GetMessage | undefined;
+      await eventually(async () => {
+        const got = await consumer.get(names.dispatchQueue, { noAck: true });
+        expect(got).not.toBe(false);
+        message = got === false ? undefined : got;
+      });
+      const waited = Date.now() - parkedAt;
+
+      expect(waited).toBeGreaterThanOrEqual(delayMs - 50);
+      expect(message?.content.toString()).toBe('parked');
+      expect(message?.properties.messageId).toBe('evt-1');
+      expect(message?.properties.headers?.['x-dispatch-attempt']).toBe(2);
+    });
+
+    it('names the queue after its delay, so a changed delay makes a new queue instead of failing', async () => {
+      const namespace = testingNamespace();
+      const channel = await conn.createChannel();
+      const names = await declareEventTopology(channel, { namespace });
+
+      await declareDispatchRetryTopology(channel, { namespace, delayMs: 5000 });
+      await expect(
+        declareDispatchRetryTopology(channel, { namespace, delayMs: 7000 }),
+      ).resolves.toBeDefined();
+
+      expect(names.dispatchRetryQueue(5000)).not.toBe(
+        names.dispatchRetryQueue(7000),
+      );
+      const probe = await conn.createChannel();
+      await expect(
+        probe.checkQueue(names.dispatchRetryQueue(5000)),
+      ).resolves.toBeDefined();
+      const probe2 = await conn.createChannel();
+      await expect(
+        probe2.checkQueue(names.dispatchRetryQueue(7000)),
+      ).resolves.toBeDefined();
+    });
+
+    it('is not declared by the events side alone, so the relay never creates it', async () => {
+      const namespace = testingNamespace();
+      const channel = await conn.createChannel();
+      const names = await declareEventTopology(channel, { namespace });
+
+      const probe = await conn.createChannel();
+      await expect(
+        probe.checkQueue(names.dispatchRetryQueue(5000)),
+      ).rejects.toThrow(/NOT_FOUND/);
+    });
+
+    it.each([0, -1, 1.5, Number.NaN])(
+      'rejects a delay of %s',
+      async (delayMs) => {
+        const channel = await conn.createChannel();
+
+        await expect(
+          declareDispatchRetryTopology(channel, {
+            namespace: testingNamespace(),
+            delayMs,
+          }),
+        ).rejects.toThrow(RangeError);
+      },
     );
   });
 

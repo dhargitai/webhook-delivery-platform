@@ -19,6 +19,13 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(5000),
+  // A failed dispatch waits this long in the retry queue before the next try
+  // (PRD: the 5 s short-delay tier). Part of the retry queue's name, so a new
+  // value makes a new queue.
+  DISPATCHER_RETRY_DELAY_MS: z.coerce.number().int().positive().default(5000),
+  // Dispatch tries per event, the first included. With the default delay that
+  // is about 45 s of pauses before the event is dead-lettered with its reason.
+  DISPATCHER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
 });
 
 export type Env = z.output<typeof envSchema>;
