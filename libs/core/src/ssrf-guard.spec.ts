@@ -46,6 +46,13 @@ describe('isBlockedAddress', () => {
       ],
       ['fe80::1', 'link-local'],
       ['febf::1', 'link-local'],
+      ['febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'link-local'],
+      ['fec0::1', 'site-local (deprecated IPv6 private)'],
+      ['fef0::1', 'site-local (deprecated IPv6 private)'],
+      [
+        'feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+        'site-local (deprecated IPv6 private)',
+      ],
       ['ff02::1', 'multicast'],
       ['ff80::1', 'multicast'],
       ['ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'multicast'],
@@ -116,8 +123,6 @@ describe('isBlockedAddress', () => {
       '2001:db9::1',
       'fbff:ffff::1',
       'fe00::1',
-      // Just past fe80::/10, which ends at febf:ffff:...
-      'fec0::1',
       // Not in 64:ff9b::/96, so no IPv4 address is embedded in it.
       '64:ff9b::1:a00:1',
     ])('%s', (address) => {

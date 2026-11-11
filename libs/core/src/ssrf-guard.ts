@@ -34,6 +34,8 @@ const CATEGORIES: readonly Category[] = [
   { reason: 'multicast', v4: ['224.0.0.0/4'], v6: ['ff00::/8'] },
   { reason: 'reserved', v4: ['240.0.0.0/4'] },
   { reason: 'unique local (IPv6 private)', v6: ['fc00::/7'] },
+  // Deprecated by RFC 3879, but it was a private range and nothing public uses it.
+  { reason: 'site-local (deprecated IPv6 private)', v6: ['fec0::/10'] },
 ];
 
 const DENY_LIST = CATEGORIES.map(({ reason, v4 = [], v6 = [] }) => {
