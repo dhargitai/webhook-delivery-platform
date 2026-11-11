@@ -20,8 +20,13 @@ import { BROKER, DATABASE } from './tokens.js';
     {
       provide: DATABASE,
       inject: [dispatcherConfig.KEY],
-      useFactory: (config: ConfigType<typeof dispatcherConfig>) =>
-        createDatabase(config.databaseUrl),
+      useFactory: (config: ConfigType<typeof dispatcherConfig>) => {
+        const logger = new Logger('Database');
+        return createDatabase(config.databaseUrl, {
+          onPoolError: (error) =>
+            logger.error('database pool error', error.stack),
+        });
+      },
     },
     {
       provide: BROKER,

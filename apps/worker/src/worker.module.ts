@@ -23,8 +23,13 @@ import { WorkerRunner } from './worker-runner.js';
     {
       provide: DATABASE,
       inject: [workerConfig.KEY],
-      useFactory: (config: ConfigType<typeof workerConfig>) =>
-        createDatabase(config.databaseUrl),
+      useFactory: (config: ConfigType<typeof workerConfig>) => {
+        const logger = new Logger('Database');
+        return createDatabase(config.databaseUrl, {
+          onPoolError: (error) =>
+            logger.error('database pool error', error.stack),
+        });
+      },
     },
     {
       provide: BROKER,
