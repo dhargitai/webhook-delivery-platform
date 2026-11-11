@@ -83,6 +83,10 @@ export {
   toAttemptRecord,
 } from './delivery/attempt-log.js';
 export {
+  ATTEMPT_RETENTION_SECONDS,
+  MongoAttemptLog,
+} from './delivery/mongo-attempt-log.js';
+export {
   type AttemptOutcome,
   DeliveryAttempt,
   type DeliveryAttemptDeps,
