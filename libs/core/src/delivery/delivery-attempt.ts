@@ -5,13 +5,14 @@ import type { EndpointTargetLookup } from './endpoint-target-lookup.js';
 
 /** What happened to one attempt. A failed HTTP call is an outcome, not a throw. */
 export type AttemptOutcome =
-  | { kind: 'delivered'; status: number; latencyMs: number }
+  | { kind: 'delivered'; status: number; latencyMs: number; snippet: string }
   | {
       kind: 'failed';
       failure: HttpFailureKind;
       status?: number;
       error?: string;
       latencyMs: number;
+      snippet?: string;
     }
   | { kind: 'skipped'; reason: 'endpoint_missing' | 'endpoint_disabled' };
 
@@ -79,6 +80,7 @@ export class DeliveryAttempt {
         kind: 'delivered',
         status: result.status,
         latencyMs: result.latencyMs,
+        snippet: result.snippet,
       };
     }
     return {
@@ -87,6 +89,7 @@ export class DeliveryAttempt {
       status: result.status,
       error: result.error,
       latencyMs: result.latencyMs,
+      snippet: result.snippet,
     };
   }
 }

@@ -32,7 +32,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # Started now, used from Phase 2 on (the attempt log).
+  # The attempt log: the worker writes one document per delivery attempt.
   mongo:
     image: mongo:8
     volumes:
@@ -139,12 +139,15 @@ services:
       # Development only: lets the worker's SSRF guard reach the plain-http
       # mock receiver, a private address. Keep it the same as the API's.
       SSRF_ALLOW_HOSTS: mock-receiver
+      MONGO_URL: mongodb://mongo:27017
     ports:
       - '3001:3001'
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

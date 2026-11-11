@@ -12,6 +12,7 @@ import {
   type Database,
   DeliveryAttempt,
   KyselyEndpointTargetLookup,
+  type MongoAttemptLog,
   SafeHttpClient,
   SignatureService,
   SsrfGuard,
@@ -24,9 +25,10 @@ import {
 } from '@wdp/messaging';
 import type { ConsumeMessage } from 'amqplib';
 import { Kysely } from 'kysely';
+import type { MongoClient } from 'mongodb';
 import { workerConfig } from './config/worker.config.js';
 import { type HandledJob, JobMessageHandler } from './job-message-handler.js';
-import { BROKER, DATABASE } from './tokens.js';
+import { ATTEMPT_LOG, BROKER, DATABASE, MONGO } from './tokens.js';
 
 /**
  * Owns the worker's lifecycle. Nest runs shutdown hooks in a fixed order,
@@ -45,11 +47,18 @@ export class WorkerRunner
   constructor(
     @Inject(DATABASE) private readonly db: Kysely<Database>,
     @Inject(BROKER) private readonly broker: BrokerConnection,
+    @Inject(MONGO) private readonly mongo: MongoClient,
+    @Inject(ATTEMPT_LOG) private readonly attemptLog: MongoAttemptLog,
     @Inject(workerConfig.KEY)
     private readonly config: ConfigType<typeof workerConfig>,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
+    // Before any consumer starts, so no attempt is logged ahead of its
+    // indexes and an unreachable Mongo stops the worker at boot, not on the
+    // first delivery.
+    await this.attemptLog.ensureIndexes();
+
     // Declared here so the worker works against a fresh broker.
     const setup = await this.broker.createChannel();
     const names = await declareTopology(setup, {
@@ -71,6 +80,8 @@ export class WorkerRunner
         signatures: new SignatureService(),
         now: () => new Date(),
       }),
+      this.attemptLog,
+      () => new Date(),
     );
 
     // One channel per lane: the prefetch limit belongs to the channel, so each
@@ -106,6 +117,7 @@ export class WorkerRunner
   async onApplicationShutdown(): Promise<void> {
     await Promise.all(this.channels.map((channel) => channel.close()));
     await this.broker.close();
+    await this.mongo.close();
     await this.db.destroy();
   }
 

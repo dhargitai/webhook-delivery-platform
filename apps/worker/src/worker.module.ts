@@ -1,11 +1,12 @@
 import { Logger, Module } from '@nestjs/common';
 import { ConfigModule, type ConfigType } from '@nestjs/config';
-import { createDatabase } from '@wdp/core';
+import { createDatabase, MongoAttemptLog } from '@wdp/core';
 import { BrokerConnection } from '@wdp/messaging';
+import { MongoClient } from 'mongodb';
 import { envSchema } from './config/env.schema.js';
 import { workerConfig } from './config/worker.config.js';
 import { StatusController } from './status.controller.js';
-import { BROKER, DATABASE } from './tokens.js';
+import { ATTEMPT_LOG, BROKER, DATABASE, MONGO } from './tokens.js';
 import { WorkerRunner } from './worker-runner.js';
 
 @Module({
@@ -34,6 +35,23 @@ import { WorkerRunner } from './worker-runner.js';
           logger.error('broker connection error', error.stack),
         );
       },
+    },
+    {
+      // Connects lazily, on the first operation: the runner's `ensureIndexes`
+      // at boot is what makes an unreachable server stop the worker.
+      provide: MONGO,
+      inject: [workerConfig.KEY],
+      useFactory: (config: ConfigType<typeof workerConfig>) =>
+        new MongoClient(config.mongoUrl),
+    },
+    {
+      provide: ATTEMPT_LOG,
+      inject: [MONGO, workerConfig.KEY],
+      useFactory: (
+        client: MongoClient,
+        config: ConfigType<typeof workerConfig>,
+      ) =>
+        new MongoAttemptLog(client.db(config.mongoDb).collection('attempts')),
     },
     WorkerRunner,
   ],

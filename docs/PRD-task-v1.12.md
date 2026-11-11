@@ -1,8 +1,8 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.11
-**Source PRD:** PRD-v1.2
+**Version:** 1.12
+**Source PRD:** PRD-v1.3
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -29,7 +29,7 @@ Tenants publish events through a public REST API, and the platform delivers ever
 - `SECRETS_KEK_V1`: a base64 32-byte key, needed from Task 22.
 - `TIME_SCALE` (default 1, demo 30, tests 1000), needed from Task 16.
 - A JWT signing secret shared by `api` and `gateway`, from Task 38. The PRD does not name it; add it to `.env.example`.
-- A MongoDB container in the integration test setup (it starts only Postgres, Redis and RabbitMQ today), from Task 15.
+- A MongoDB container in the integration test setup (started with Postgres, Redis and RabbitMQ since Task 15).
 - Locked PRD parameters (section 6) must not change without asking.
 
 ## 4. Task Breakdown
@@ -277,19 +277,19 @@ The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through
 - [x] The job is acked only after the attempt is handled
 - [x] A later attempt carries the same `webhook-id` and a fresh timestamp
 
-### Task 15: Attempt log in Mongo ⬜
+### Task 15: Attempt log in Mongo ✅
 
 **Original Story:** 9
 **Scope:** `worker`, Mongo
 **Blocked by:** Task 14
 
 **What to build:**
-Write one attempt document per attempt (status, HTTP code, latency, snippet up to 1 KB, error) with the covered compound indexes and a 30-day TTL.
+Write one attempt document per attempt (status, HTTP code, latency, snippet up to 1 KB, error) with the covered compound indexes and a 30-day TTL. Built as the `AttemptLog` port, `AttemptRecord` and `toAttemptRecord` (the mapping from an outcome) in `@wdp/core`, and `MongoAttemptLog` (`record`, and `ensureIndexes`, which the worker calls at boot before it consumes). The document uses the PRD's snake_case names; `ts` is a `Date` (the TTL needs one) and is when the attempt started. `error` is the failure kind, plus `: <message>` when there is one, and fields an attempt does not have are left out. A skipped attempt (endpoint missing or disabled) made no call and is not logged. `JobMessageHandler` writes the record before the ack, so an acked job is always in the log; a failed write rejects the handler and dead-letters the job until Task 18. `attemptNo` is optional on the job and the message (absent means 1) for Task 18 to set. Every index, the event one included, ends in `ts, _id` descending, so no log query needs a sort stage; the TTL is a separate `ts` index, because a compound index cannot expire. The worker reads `MONGO_URL` and `MONGO_DB` (default `wdp`).
 
 **Acceptance Criteria:**
 
-- [ ] Every attempt is recorded with the PRD fields
-- [ ] The indexes and the TTL exist
+- [x] Every attempt is recorded with the PRD fields
+- [x] The indexes and the TTL exist
 
 ### Task 16: RetryPolicy ✅
 

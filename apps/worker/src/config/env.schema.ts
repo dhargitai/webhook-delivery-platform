@@ -11,6 +11,9 @@ export const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().min(1),
   RABBITMQ_URL: z.string().min(1),
+  // The MongoDB server and database the attempt log is written to.
+  MONGO_URL: z.string().min(1),
+  MONGO_DB: z.string().min(1).default('wdp'),
   // Prefix of every exchange and queue. Services of one deployment share it.
   BROKER_NAMESPACE: z.string().min(1).default('wdp'),
   // Number of fresh-delivery lanes the worker consumes: 4 locally, 16 in the

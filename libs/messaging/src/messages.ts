@@ -18,6 +18,9 @@ export const deliveryRequestedSchema = z.object({
   endpointId: z.string().min(1),
   eventType: z.string().min(1),
   payload: z.json(),
+  // Which try of this delivery the job is. Absent on a first delivery; a retry
+  // sets it, so the attempt log can tell the tries apart.
+  attemptNo: z.number().int().positive().optional(),
 });
 export type DeliveryRequested = z.output<typeof deliveryRequestedSchema>;
 

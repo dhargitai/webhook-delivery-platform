@@ -19,6 +19,7 @@
     "@wdp/domain": "workspace:*",
     "ioredis": "^6.0.0",
     "kysely": "^0.29.8",
+    "mongodb": "^7.8.0",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.23.1",
     "uuid": "^14.0.3"
