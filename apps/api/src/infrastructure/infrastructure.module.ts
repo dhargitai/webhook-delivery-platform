@@ -2,6 +2,7 @@ import {
   Global,
   Inject,
   Injectable,
+  Logger,
   Module,
   type OnApplicationShutdown,
 } from '@nestjs/common';
@@ -32,8 +33,13 @@ class ConnectionCloser implements OnApplicationShutdown {
     {
       provide: DATABASE,
       inject: [databaseConfig.KEY],
-      useFactory: (config: ConfigType<typeof databaseConfig>) =>
-        createDatabase(config.url),
+      useFactory: (config: ConfigType<typeof databaseConfig>) => {
+        const logger = new Logger('Database');
+        return createDatabase(config.url, {
+          onPoolError: (error) =>
+            logger.error('database pool error', error.stack),
+        });
+      },
     },
     {
       provide: REDIS,

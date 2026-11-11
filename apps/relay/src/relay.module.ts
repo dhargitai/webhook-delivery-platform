@@ -20,8 +20,13 @@ import { BROKER, DATABASE } from './tokens.js';
     {
       provide: DATABASE,
       inject: [relayConfig.KEY],
-      useFactory: (config: ConfigType<typeof relayConfig>) =>
-        createDatabase(config.databaseUrl),
+      useFactory: (config: ConfigType<typeof relayConfig>) => {
+        const logger = new Logger('Database');
+        return createDatabase(config.databaseUrl, {
+          onPoolError: (error) =>
+            logger.error('database pool error', error.stack),
+        });
+      },
     },
     {
       provide: BROKER,
