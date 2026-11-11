@@ -107,11 +107,12 @@ Dockerfile            one image for every service, Node 24 runtime
 docker-compose.yml    the full stack
 docs/
   PRD-v1.0.md       product requirements and locked design parameters
+  PRD-task-v1.3.md  implementation task breakdown, with status per task
 tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
 
-`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, and the dispatcher with its subscription lookup). `@wdp/messaging` holds the RabbitMQ layer (topology, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (worker, gateway, dashboard) are added as the phases land.
+`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, and the signature service). `@wdp/messaging` holds the RabbitMQ layer (topology, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (worker, gateway, dashboard) are added as the phases land.
 
 ### How workspace libraries resolve
 
@@ -281,6 +282,7 @@ The three demo scenes: (1) kill the receiver and watch retries, the breaker open
 ## Documentation
 
 - [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md): the product requirements document, covering scope, user stories, deep modules, implementation decisions and locked parameters, testing strategy, phases and risks.
+- [`docs/PRD-task-v1.3.md`](docs/PRD-task-v1.3.md): the implementation task breakdown, with the status of every task.
 
 ## License
 
