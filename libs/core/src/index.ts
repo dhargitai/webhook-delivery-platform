@@ -43,3 +43,15 @@ export {
   type PublishFailure,
 } from './outbox/outbox-relay.js';
 export { RelayLoop, type RelayLoopOptions } from './outbox/relay-loop.js';
+export {
+  type DeliveryJob,
+  DeliveryPublisher,
+} from './dispatch/delivery-publisher.js';
+export {
+  type DispatchableEvent,
+  type DispatchFailure,
+  Dispatcher,
+  PartialDispatchError,
+} from './dispatch/dispatcher.js';
+export { KyselySubscriptionLookup } from './dispatch/kysely-subscription-lookup.js';
+export { SubscriptionLookup } from './dispatch/subscription-lookup.js';
