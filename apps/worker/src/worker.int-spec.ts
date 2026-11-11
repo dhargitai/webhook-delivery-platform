@@ -21,6 +21,7 @@ import {
 } from '@wdp/messaging';
 import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import type { Kysely } from 'kysely';
+import { type Collection, type Document, MongoClient } from 'mongodb';
 import {
   afterAll,
   beforeAll,
@@ -38,12 +39,15 @@ interface Received {
   body: string;
 }
 
-describe('worker (real Postgres and RabbitMQ)', () => {
+describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
   const namespace = testingNamespace();
   const names: TopologyNames = topologyNames(namespace);
   const signatures = new SignatureService();
   const brokerErrors: Error[] = [];
 
+  const mongoDbName = `wdp_test_${randomUUID().replaceAll('-', '')}`;
+  let mongo: MongoClient;
+  let attempts: Collection<Document>;
   let testDb: TestDatabase;
   let db: Kysely<Database>;
   let conn: BrokerConnection;
@@ -58,6 +62,8 @@ describe('worker (real Postgres and RabbitMQ)', () => {
   beforeAll(async () => {
     testDb = await createTestDatabase(inject('postgresAdminUrl'));
     db = createDatabase(testDb.url);
+    mongo = await MongoClient.connect(inject('mongoUrl'));
+    attempts = mongo.db(mongoDbName).collection('attempts');
     conn = await BrokerConnection.connect(inject('rabbitUrl'), (e) =>
       brokerErrors.push(e),
     );
@@ -92,6 +98,8 @@ describe('worker (real Postgres and RabbitMQ)', () => {
     // evaluated, so the import comes after the environment is set.
     process.env.DATABASE_URL = testDb.url;
     process.env.RABBITMQ_URL = inject('rabbitUrl');
+    process.env.MONGO_URL = inject('mongoUrl');
+    process.env.MONGO_DB = mongoDbName;
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
@@ -108,6 +116,8 @@ describe('worker (real Postgres and RabbitMQ)', () => {
     await conn.close();
     await db.destroy();
     await testDb.drop();
+    await mongo.db(mongoDbName).dropDatabase();
+    await mongo.close();
     expect(brokerErrors).toEqual([]);
   });
 
@@ -356,5 +366,102 @@ describe('worker (real Postgres and RabbitMQ)', () => {
     expect(await laneBacklog()).toBe(0);
     expect(received).toHaveLength(0);
     await channel.close();
+  });
+
+  describe('the attempt log', () => {
+    // The log is written before the ack, so once the lanes are empty the
+    // document is already there: no waiting for it.
+    const logged = (deliveryId: string) =>
+      attempts
+        .find({ delivery_id: deliveryId }, { projection: { _id: 0 } })
+        .toArray();
+
+    it('records a delivered attempt with the PRD fields', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId);
+      const job = jobFor(tenantId, id);
+      const before = Date.now();
+
+      await publishJob(job);
+      await untilAcked();
+
+      const [doc, ...rest] = await logged(job.deliveryId);
+      expect(rest).toEqual([]);
+      expect(doc).toMatchObject({
+        tenant_id: tenantId,
+        endpoint_id: id,
+        event_id: job.eventId,
+        delivery_id: job.deliveryId,
+        attempt_no: 1,
+        status: 'success',
+        http_status: 200,
+        response_snippet: 'ok',
+      });
+      expect(doc?.['latency_ms']).toBeGreaterThanOrEqual(0);
+      expect(doc?.['ts']).toBeInstanceOf(Date);
+      expect(doc?.['ts'].getTime()).toBeGreaterThanOrEqual(before - 1000);
+      expect(doc).not.toHaveProperty('error');
+    });
+
+    it('records a failed attempt as a failure with the HTTP status and the error kind', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId);
+      const job = jobFor(tenantId, id);
+      receiverStatus = 503;
+
+      await publishJob(job);
+      await untilAcked();
+
+      expect(await logged(job.deliveryId)).toEqual([
+        expect.objectContaining({
+          status: 'failure',
+          http_status: 503,
+          error: 'http_error',
+          response_snippet: 'ok',
+        }),
+      ]);
+    });
+
+    it('records a refused connection as a failure with no HTTP status', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://127.0.0.1:${receiverPort}/hook`, // not on the allowlist
+      });
+      const job = jobFor(tenantId, id);
+
+      await publishJob(job);
+      await untilAcked();
+
+      const [doc] = await logged(job.deliveryId);
+      expect(doc).toMatchObject({ status: 'failure' });
+      expect(String(doc?.['error'])).toMatch(/^ssrf_blocked/);
+      expect(doc).not.toHaveProperty('http_status');
+    });
+
+    it('records nothing for a disabled endpoint: no attempt was made', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, { status: 'disabled' });
+      const job = jobFor(tenantId, id);
+
+      await publishJob(job);
+      await untilAcked();
+
+      expect(await logged(job.deliveryId)).toEqual([]);
+    });
+
+    it('has created the indexes and the 30-day TTL at boot', async () => {
+      const indexes = await attempts.indexes();
+
+      const ttl = indexes.find((i) => i.name === 'ts_ttl_idx');
+      expect(ttl?.expireAfterSeconds).toBe(30 * 24 * 60 * 60);
+      expect(indexes.map((i) => i.name)).toEqual(
+        expect.arrayContaining([
+          'tenant_ts_idx',
+          'tenant_endpoint_ts_idx',
+          'tenant_status_ts_idx',
+          'tenant_event_ts_idx',
+        ]),
+      );
+    });
   });
 });

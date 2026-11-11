@@ -37,6 +37,27 @@ describe('encodeMessage / decodeMessage', () => {
     ).toEqual(delivery);
   });
 
+  it('keeps the attempt number of a retried delivery, and leaves a first delivery without one', () => {
+    expect(
+      decodeMessage(
+        encodeMessage({ ...delivery, attemptNo: 3 }),
+        deliveryRequestedSchema,
+      ).attemptNo,
+    ).toBe(3);
+    expect(
+      decodeMessage(encodeMessage(delivery), deliveryRequestedSchema).attemptNo,
+    ).toBeUndefined();
+  });
+
+  it.each([0, -1, 1.5, '2'])('rejects an attempt number of %j', (attemptNo) => {
+    expect(() =>
+      decodeMessage(
+        encodeMessage({ ...delivery, attemptNo }),
+        deliveryRequestedSchema,
+      ),
+    ).toThrow(MalformedMessageError);
+  });
+
   it.each([
     { name: 'an array', payload: [1, 2] },
     { name: 'a string', payload: 'text' },

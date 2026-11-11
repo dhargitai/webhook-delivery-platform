@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
@@ -18,6 +19,8 @@ describe('worker status (e2e)', () => {
     process.env.DATABASE_URL = testDb.url;
     process.env.RABBITMQ_URL = inject('rabbitUrl');
     process.env.BROKER_NAMESPACE = testingNamespace();
+    process.env.MONGO_URL = inject('mongoUrl');
+    process.env.MONGO_DB = `wdp_test_${randomUUID().replaceAll('-', '')}`;
     const { WorkerModule } = await import('../src/worker.module.js');
     const moduleRef = await Test.createTestingModule({
       imports: [WorkerModule],

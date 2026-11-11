@@ -4,6 +4,7 @@ import { envSchema } from './env.schema.js';
 const required = {
   DATABASE_URL: 'postgres://u:p@localhost/db',
   RABBITMQ_URL: 'amqp://localhost',
+  MONGO_URL: 'mongodb://localhost:27017',
 };
 
 describe('worker env schema', () => {
@@ -11,6 +12,7 @@ describe('worker env schema', () => {
     expect(envSchema.parse(required)).toEqual({
       ...required,
       PORT: 3001,
+      MONGO_DB: 'wdp',
       BROKER_NAMESPACE: 'wdp',
       LANE_COUNT: 4,
       WORKER_PREFETCH: 20,
@@ -31,11 +33,14 @@ describe('worker env schema', () => {
     expect(env.WORKER_PREFETCH).toBe(50);
   });
 
-  it.each(['DATABASE_URL', 'RABBITMQ_URL'] as const)('requires %s', (name) => {
-    const { [name]: _removed, ...rest } = required;
+  it.each(['DATABASE_URL', 'RABBITMQ_URL', 'MONGO_URL'] as const)(
+    'requires %s',
+    (name) => {
+      const { [name]: _removed, ...rest } = required;
 
-    expect(envSchema.safeParse(rest).success).toBe(false);
-  });
+      expect(envSchema.safeParse(rest).success).toBe(false);
+    },
+  );
 
   it.each([
     { name: 'a port of 0', env: { PORT: '0' } },
@@ -56,6 +61,12 @@ describe('worker env schema', () => {
     expect(
       envSchema.safeParse({ ...required, BROKER_NAMESPACE: '' }).success,
     ).toBe(false);
+  });
+
+  it('rejects an empty Mongo database name, which would log into no database', () => {
+    expect(envSchema.safeParse({ ...required, MONGO_DB: '' }).success).toBe(
+      false,
+    );
   });
 
   describe('SSRF_ALLOW_HOSTS', () => {

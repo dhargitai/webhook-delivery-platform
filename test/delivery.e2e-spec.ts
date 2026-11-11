@@ -14,6 +14,7 @@ import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
 import { deliveryId } from '@wdp/domain';
 import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import type { Kysely } from 'kysely';
+import { type Collection, type Document, MongoClient } from 'mongodb';
 import request from 'supertest';
 import {
   afterAll,
@@ -37,6 +38,9 @@ interface Received {
  */
 describe('first delivery (e2e)', () => {
   const signatures = new SignatureService();
+  const mongoDbName = `wdp_test_${randomUUID().replaceAll('-', '')}`;
+  let mongo: MongoClient;
+  let attempts: Collection<Document>;
   let testDb: TestDatabase;
   let db: Kysely<Database>;
   let api: NestExpressApplication;
@@ -49,6 +53,8 @@ describe('first delivery (e2e)', () => {
   beforeAll(async () => {
     testDb = await createTestDatabase(inject('postgresAdminUrl'));
     db = createDatabase(testDb.url);
+    mongo = await MongoClient.connect(inject('mongoUrl'));
+    attempts = mongo.db(mongoDbName).collection('attempts');
 
     // A receiver on loopback. It is plain http on a private address, so it is
     // reachable only because both the API (at registration) and the worker (at
@@ -74,6 +80,8 @@ describe('first delivery (e2e)', () => {
     process.env.DATABASE_URL = testDb.url;
     process.env.REDIS_URL = inject('redisUrl');
     process.env.RABBITMQ_URL = inject('rabbitUrl');
+    process.env.MONGO_URL = inject('mongoUrl');
+    process.env.MONGO_DB = mongoDbName;
     process.env.BROKER_NAMESPACE = testingNamespace();
     process.env.LANE_COUNT = '4';
     process.env.RELAY_POLL_INTERVAL_MS = '20';
@@ -116,6 +124,8 @@ describe('first delivery (e2e)', () => {
     await new Promise<void>((resolve) => receiverServer.close(() => resolve()));
     await db.destroy();
     await testDb.drop();
+    await mongo.db(mongoDbName).dropDatabase();
+    await mongo.close();
   });
 
   async function seedTenant() {
@@ -212,6 +222,38 @@ describe('first delivery (e2e)', () => {
         new Date(),
       ),
     ).toBe(true);
+  });
+
+  it('logs the attempt, so it can be found by event and endpoint', async () => {
+    const { tenantId, key } = await seedTenant();
+    const endpoint = await registerEndpoint(key, '/logged', ['invoice.paid']);
+
+    const eventId = await postEvent(key, 'invoice.paid');
+
+    await eventually(() => expect(to('/logged')).toHaveLength(1));
+    await eventually(async () => {
+      expect(
+        await attempts.countDocuments({
+          tenant_id: tenantId,
+          event_id: eventId,
+        }),
+      ).toBe(1);
+    });
+    expect(
+      await attempts.findOne(
+        { tenant_id: tenantId, event_id: eventId },
+        { projection: { _id: 0, ts: 0, latency_ms: 0 } },
+      ),
+    ).toEqual({
+      tenant_id: tenantId,
+      endpoint_id: endpoint.id,
+      event_id: eventId,
+      delivery_id: deliveryId(eventId, endpoint.id),
+      attempt_no: 1,
+      status: 'success',
+      http_status: 200,
+      response_snippet: 'ok',
+    });
   });
 
   it('delivers only to endpoints subscribed to the event type', async () => {
