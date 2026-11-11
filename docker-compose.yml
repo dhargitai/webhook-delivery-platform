@@ -15,7 +15,7 @@ x-app: &app
     REDIS_URL: redis://redis:6379
     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     BROKER_NAMESPACE: wdp
-    LANE_COUNT: "4"
+    LANE_COUNT: '4'
 
 services:
   postgres:
@@ -27,7 +27,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wdp -d wdp"]
+      test: ['CMD-SHELL', 'pg_isready -U wdp -d wdp']
       interval: 3s
       timeout: 3s
       retries: 20
@@ -38,7 +38,8 @@ services:
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test:
+        ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -46,7 +47,7 @@ services:
   redis:
     image: redis:8
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 3s
       timeout: 3s
       retries: 20
@@ -57,11 +58,11 @@ services:
     image: rabbitmq:4.4-management
     ports:
       # Management UI, login guest / guest.
-      - "15672:15672"
+      - '15672:15672'
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
       interval: 5s
       timeout: 10s
       retries: 30
@@ -71,21 +72,21 @@ services:
   # Postgres waits for it.
   migrate:
     <<: *app
-    command: ["node", "apps/ops/dist/migrate.js"]
+    command: ['node', 'apps/ops/dist/migrate.js']
     depends_on:
       postgres:
         condition: service_healthy
 
   api:
     <<: *app
-    command: ["node", "apps/api/dist/main.js"]
+    command: ['node', 'apps/api/dist/main.js']
     environment:
       <<: *env
-      PORT: "3000"
+      PORT: '3000'
       # Development only: lets the plain-http mock receiver be registered.
       SSRF_ALLOW_HOSTS: mock-receiver
     ports:
-      - "3000:3000"
+      - '3000:3000'
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,7 +108,7 @@ services:
 
   relay:
     <<: *app
-    command: ["node", "apps/relay/dist/main.js"]
+    command: ['node', 'apps/relay/dist/main.js']
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,7 +119,7 @@ services:
 
   dispatcher:
     <<: *app
-    command: ["node", "apps/dispatcher/dist/main.js"]
+    command: ['node', 'apps/dispatcher/dist/main.js']
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,12 +132,12 @@ services:
   # dependency until it consumes the lanes (Task 14).
   worker:
     <<: *app
-    command: ["node", "apps/worker/dist/main.js"]
+    command: ['node', 'apps/worker/dist/main.js']
     environment:
       <<: *env
-      PORT: "3001"
+      PORT: '3001'
     ports:
-      - "3001:3001"
+      - '3001:3001'
     healthcheck:
       test:
         - CMD
@@ -150,11 +151,11 @@ services:
   # A stand-in for a customer's endpoint. Nothing calls it before Phase 2.
   mock-receiver:
     <<: *app
-    command: ["node", "apps/mock-receiver/dist/main.js"]
+    command: ['node', 'apps/mock-receiver/dist/main.js']
     environment:
-      PORT: "4000"
+      PORT: '4000'
     ports:
-      - "4000:4000"
+      - '4000:4000'
     healthcheck:
       test:
         - CMD
@@ -169,8 +170,8 @@ services:
   # optionally followed by `--tenant <name>`.
   seed:
     <<: *app
-    profiles: ["tools"]
-    entrypoint: ["node", "apps/ops/dist/seed.js"]
+    profiles: ['tools']
+    entrypoint: ['node', 'apps/ops/dist/seed.js']
     depends_on:
       migrate:
         condition: service_completed_successfully
