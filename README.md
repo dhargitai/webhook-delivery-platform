@@ -4,21 +4,29 @@ A multi-tenant platform that accepts events through a public REST API and reliab
 
 This is a **learning and portfolio project**. It is designed for a realistic production load (1,000 tenants, 5k events/s peak, fan-out 3, about 15k deliveries/s, first attempt within 5 s at p99), but built and demoed as a thin vertical slice at hundreds of events per second. Every simplification is deliberate and has a documented scale-up path.
 
-> **Status: Phase 1 not started.** The repository currently contains the monorepo skeleton (Bun workspaces, a NestJS "Hello World" API and four empty shared libraries) and a complete PRD. None of the platform features described below exist yet. Sections marked **(planned)** describe the target, not the current behaviour.
+> **Status: Phase 1 is complete, Phase 2 has not started.** `docker compose up` runs the whole Phase 1 stack: events are accepted through `POST /v1/events` (API key auth, idempotency, per-tenant rate limit), stored atomically in a Postgres outbox, moved onto RabbitMQ by the relay, and fanned out by the dispatcher into one delivery job per subscribed endpoint on the lane queues, with endpoint and subscription management around it. **Nothing delivers those jobs yet:** the delivery worker, signing, retries and the attempt log are Phase 2, and everything after Phase 1 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
 
 ## Contents
 
-- [Principles](#principles)
-- [Architecture (planned)](#architecture-planned)
-- [Tech stack](#tech-stack)
-- [Repository layout](#repository-layout)
-- [Getting started](#getting-started)
-- [Scripts](#scripts)
-- [Testing](#testing)
-- [Configuration](#configuration)
-- [Deployment](#deployment)
-- [Roadmap](#roadmap)
-- [Documentation](#documentation)
+- [Webhook Delivery Platform](#webhook-delivery-platform)
+  - [Contents](#contents)
+  - [Principles](#principles)
+  - [Architecture (planned)](#architecture-planned)
+    - [Signature scheme (planned, Standard Webhooks style)](#signature-scheme-planned-standard-webhooks-style)
+  - [Tech stack](#tech-stack)
+  - [Repository layout](#repository-layout)
+    - [How workspace libraries resolve](#how-workspace-libraries-resolve)
+  - [Getting started](#getting-started)
+    - [Prerequisites](#prerequisites)
+    - [Install and run](#install-and-run)
+    - [Full stack](#full-stack)
+  - [Scripts](#scripts)
+  - [Testing](#testing)
+  - [Configuration](#configuration)
+  - [Deployment](#deployment)
+  - [Roadmap](#roadmap)
+  - [Documentation](#documentation)
+  - [License](#license)
 
 ## Principles
 
@@ -70,36 +78,45 @@ Each request carries `webhook-id` (stable across retries), `webhook-timestamp` (
 | Language | TypeScript (strict, ESM, `nodenext`) |
 | Backend | Node.js 24, NestJS 12 |
 | Package manager | Bun workspaces (Node is the runtime) |
-| Config and events store | PostgreSQL (planned) |
-| Attempt log | MongoDB (planned) |
-| Fast state | Redis (planned) |
-| Messaging | RabbitMQ with quorum queues (planned) |
+| Config and events store | PostgreSQL |
+| Attempt log | MongoDB (started by Compose, used from Phase 2) |
+| Fast state | Redis (the ingest rate limit so far) |
+| Messaging | RabbitMQ with quorum queues |
 | Frontend | React, TanStack Query, Redux, Redux-saga, TanStack Virtual (planned) |
 | Realtime | Socket.IO gateway, RxJS batching (planned) |
-| Testing | Vitest, Testcontainers (planned) |
+| Testing | Vitest, Testcontainers |
 | Tooling | oxlint (type-aware), Prettier, Nest's default Logger and prom-client (planned) |
 
 ## Repository layout
 
 ```
 apps/
-  api/              @wdp/api: public REST API (currently the NestJS scaffold)
+  api/              @wdp/api: public REST API (ingestion, endpoints, subscriptions)
+  relay/            @wdp/relay: outbox relay, Postgres events to RabbitMQ (no HTTP)
+  dispatcher/       @wdp/dispatcher: fans each event out into delivery jobs on the lane queues (no HTTP)
+  mock-receiver/    @wdp/mock-receiver: a customer endpoint stand-in with configurable failures, latency and hangs
+  ops/              @wdp/ops: the db:migrate and db:seed commands
 libs/
   domain/           @wdp/domain: aggregates and the delivery state machine
   core/             @wdp/core: deep modules (retry policy, signing, SSRF guard, breaker, ...)
   messaging/        @wdp/messaging: broker contracts and topology
   observability/    @wdp/observability: logging and metrics
+test/                 system-level e2e specs that span several apps
+migrations/           SQL schema (node-pg-migrate)
+Dockerfile            one image for every service, Node 24 runtime
+docker-compose.yml    the full stack
 docs/
   PRD-v1.0.md       product requirements and locked design parameters
 tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
 
-The four libraries are empty placeholders. The remaining apps (relay, dispatcher, worker, gateway, mock receiver, dashboard) are added as the phases land.
+`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, and the dispatcher with its subscription lookup). `@wdp/messaging` holds the RabbitMQ layer (topology, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (worker, gateway, dashboard) are added as the phases land.
 
 ### How workspace libraries resolve
 
-- **Dev and tests:** `@wdp/*` resolves to each library's `src` through the paths in `tsconfig.base.json`, so no rebuild is needed while editing.
+- **Dev and typechecking:** `@wdp/*` resolves to each library's `src` through the paths in `tsconfig.base.json`, so no rebuild is needed while editing.
+- **Tests:** Vitest aliases `@wdp/*` to each library's `src` explicitly (`vitest.aliases.ts`). The tsconfig paths are not used, because a lib's build tsconfig empties them and its sources would otherwise load a sibling lib from `dist` while specs load `src`, giving two module copies.
 - **Builds:** the build tsconfigs set `"paths": {}`, so imports resolve through `node_modules` to each library's compiled `dist`. `bun run build` builds everything in dependency order.
 - **Linking:** an app only gets a library linked once its `package.json` lists it, for example `"@wdp/core": "workspace:*"`, followed by `bun install`.
 
@@ -109,7 +126,7 @@ The four libraries are empty placeholders. The remaining apps (relay, dispatcher
 
 - [Bun](https://bun.sh) (package manager and workspace tool)
 - Node.js 24 (runtime)
-- Docker and Docker Compose, once the infrastructure stack lands (planned)
+- Docker with Compose, for the full stack, and for the integration and end-to-end tests (they start Postgres, Redis and RabbitMQ through Testcontainers)
 
 ### Install and run
 
@@ -124,11 +141,49 @@ bun run build
 bun run --filter @wdp/api start:prod
 ```
 
-The API listens on `PORT` (default `3000`). Today it answers `GET /` with `Hello World!`.
+The API needs `DATABASE_URL` and `REDIS_URL` (see [Configuration](#configuration)) and listens on `PORT` (default `3000`). All routes live under `/v1` and need `Authorization: Bearer <api key>`; errors are `application/problem+json`. To run the apps by hand you need a Postgres, a Redis and a RabbitMQ; the next section starts all of them for you.
 
-### Full stack (planned)
+### Full stack
 
-Phase 1 adds a `docker compose up` that starts Postgres, MongoDB, Redis, RabbitMQ and the services, plus a mock receiver with configurable failure rate, latency and hang behaviour. This section will be completed then.
+Node is the runtime in every image; Bun is only the package manager and is not in the final image.
+
+```bash
+docker compose up --build        # first run builds one image, about a minute and a half
+docker compose run --rm seed     # creates the "demo" tenant, prints its API key once
+```
+
+`up` starts Postgres, MongoDB (unused until Phase 2), Redis, RabbitMQ, a one-shot `migrate` that applies the SQL migrations, then the `api` (port 3000), `relay`, `dispatcher` and `mock-receiver` (port 4000). The RabbitMQ management UI is at <http://localhost:15672> (login `guest` / `guest`). `docker compose run --rm seed --tenant acme` seeds another tenant; running it again reuses the tenant and issues one more key, and earlier keys keep working.
+
+The demo path, with the key from `seed` in `$KEY`:
+
+```bash
+# Register the mock receiver. It is plain http on a private name, which only
+# the dev-only SSRF_ALLOW_HOSTS=mock-receiver setting in docker-compose.yml allows.
+curl -s -X POST localhost:3000/v1/endpoints -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' \
+  -d '{"url":"http://mock-receiver:4000/hook?fail=0.3"}'          # note the "id"
+
+curl -s -X PUT localhost:3000/v1/endpoints/<id>/subscriptions -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' -d '{"event_types":["invoice.paid"]}'
+
+curl -s -X POST localhost:3000/v1/events -H "Authorization: Bearer $KEY" \
+  -H 'Idempotency-Key: demo-1' -H 'content-type: application/json' \
+  -d '{"type":"invoice.paid","payload":{"invoice":"INV-42"}}'     # 202 {"event_id": ...}
+```
+
+Within a second the outbox is empty and one job sits on a `wdp.fresh.shard.NN` queue (see it in the management UI, or `docker compose exec rabbitmq rabbitmqctl list_queues name messages`). Sending the same `Idempotency-Key` again returns the same `event_id` and creates no second job. Stop and start `relay` or `dispatcher` with `docker compose stop|start` to watch events wait and then drain.
+
+The mock receiver does nothing until Phase 2's worker calls it, but it can already be driven by hand. It answers `POST /hook` (any path below it), and the query string sets its behaviour:
+
+| Query | Effect |
+|---|---|
+| `fail=0.3` | Fails about 30% of requests (default 0) |
+| `failStatus=503` | The status of a failure (default 500) |
+| `status=429` | The status of every request that does not fail (default 200) |
+| `latency=200` | Waits 200 ms before answering (up to 60000) |
+| `hang=1` | Never answers, to exercise the 10 s timeout |
+
+`GET /stats` counts what arrived (including deliveries per `webhook-id`, so a retry shows as a repeat), `POST /stats/reset` clears it, and `GET /health` is its health check. Bad values are refused with a 400 that names the parameter. `docker compose down -v` removes the stack and its data.
 
 ## Scripts
 
@@ -137,15 +192,18 @@ Run from the repository root.
 | Script | What it does |
 |---|---|
 | `bun run build` | Builds all libraries and apps in dependency order |
-| `bun run typecheck` | Type-checks `apps/` and `libs/` with no emit |
+| `bun run typecheck` | Type-checks `apps/`, `libs/` and `test/` with no emit |
+| `bun run db:migrate` | Applies the SQL migrations to `DATABASE_URL`. Run `bun run build` first; Compose does this for you |
+| `bun run db:seed` | Creates a tenant and prints an API key, `-- --tenant <name>` to name it. Run `bun run build` first; with Compose use `docker compose run --rm seed` |
 | `bun run lint` | Runs oxlint with type-aware rules |
 | `bun run format` | Formats sources with Prettier |
 | `bun run test` | Runs unit tests (`*.spec.ts`) |
 | `bun run test:watch` | Runs unit tests in watch mode |
 | `bun run test:cov` | Runs unit tests with coverage |
-| `bun run test:e2e` | Runs end-to-end tests (`*.e2e-spec.ts`) |
+| `bun run test:integration` | Runs integration tests (`*.int-spec.ts`) against real Postgres, Redis and RabbitMQ. Needs Docker |
+| `bun run test:e2e` | Runs end-to-end tests (`*.e2e-spec.ts`) against the real app. Needs Docker |
 
-Per-app scripts (`start`, `start:dev`, `start:debug`, `start:prod`) live in each app's `package.json` and run with `bun run --filter @wdp/api <script>`.
+Per-app scripts (`start`, `start:dev`, `start:debug`, `start:prod`) live in each app's `package.json` and run with `bun run --filter @wdp/api <script>` (or `@wdp/relay`, `@wdp/dispatcher`).
 
 ## Testing
 
@@ -154,20 +212,47 @@ Tests assert external behaviour, and each one exists to catch a regression: it m
 | Level | Targets |
 |---|---|
 | Unit | Retry policy, signature service, SSRF guard, delivery state machine, cursor codec. Pure or nearly pure, table-driven, no containers. |
-| Integration (Testcontainers, planned) | Idempotent ingest under concurrent duplicates, outbox relay crash recovery, circuit breaker and limiter against real Redis, the retry topology against a real broker, worker ack ordering. |
-| End-to-end (planned) | Event accepted, delivered to the mock receiver, attempt visible through the API. A failing receiver leads to retries, the breaker opening, recovery and success. The same script is the demo. |
+| Integration (Testcontainers) | Built: idempotent ingest under concurrent duplicates, the schema's constraints, endpoint and subscription queries, the rate limiter's Lua script against real Redis, the broker topology, confirmed publishing and consumer ack ordering against real RabbitMQ (redelivery after a crash, the delivery limit, graceful stop), the outbox relay (crash between publishing and committing, `SKIP LOCKED` with two relays, no false "published" when nothing receives the event), and the dispatcher (fan-out onto the right lanes, stable job ids across redelivery, dead-lettering of failed and malformed events, tenant isolation). Planned: circuit breaker, the retry tier queues, worker ack ordering. Postgres, Redis and RabbitMQ start once per run; each spec gets its own migrated database, unique keys, or its own exchange and queue namespace. |
+| End-to-end | Built: the HTTP API against the real app (auth, ingest, idempotency, rate limiting, endpoints and subscriptions, tenant isolation); the relay app (starts, publishes, shuts down cleanly); and the whole Phase 1 pipeline with the real apps (`POST /v1/events` through the relay and dispatcher to one job per subscribed endpoint, including a late-registered endpoint and finishing the event in flight on shutdown). Planned: event delivered to the mock receiver, attempt visible through the API, a failing receiver leading to retries, the breaker opening, recovery and success. The same script is the demo. |
 
 ## Configuration
 
-Currently only `PORT` is read. The PRD locks these parameters, which become environment variables as each feature lands:
+The API validates these at boot and refuses to start if one is invalid or a required one is missing (see `.env.example`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `3000` | HTTP port of the API |
+| `DATABASE_URL` | required | Postgres connection string |
+| `REDIS_URL` | required | Redis connection string |
+| `INGEST_RATE_PER_SECOND` | `100` | Per-tenant ingest limit, sustained |
+| `INGEST_BURST` | `200` | Per-tenant ingest limit, bucket size |
+| `SSRF_ALLOW_HOSTS` | empty | Comma-separated hosts that may be registered as endpoints over plain http and any port. Development only, so the Compose mock receiver can be used; keep empty in production. The connect-time SSRF guard is Phase 3 |
+
+The relay reads `DATABASE_URL` too, plus:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RABBITMQ_URL` | required | RabbitMQ connection string |
+| `BROKER_NAMESPACE` | `wdp` | Prefix of every exchange and queue; shared by all services of a deployment |
+| `RELAY_BATCH_SIZE` | `200` | Events taken per batch |
+| `RELAY_POLL_INTERVAL_MS` | `100` | Pause after a batch that was not full |
+| `RELAY_CONFIRM_TIMEOUT_MS` | `5000` | How long to wait for the broker's confirm |
+| `RELAY_ERROR_BACKOFF_MS` | `1000` | Pause after a failed run |
+
+The dispatcher reads `DATABASE_URL`, `RABBITMQ_URL` and `BROKER_NAMESPACE` too, plus:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LANE_COUNT` | `4` | Number of fresh-delivery lanes (16 in the design). Changing it remaps endpoints to lanes, so drain the queues first |
+| `DISPATCHER_PREFETCH` | `20` | Events handled at once |
+| `DISPATCHER_CONFIRM_TIMEOUT_MS` | `5000` | How long to wait for the broker's confirm |
+
+The PRD locks further parameters, which become environment variables as each feature lands:
 
 | Variable | Planned default | Purpose |
 |---|---|---|
-| `PORT` | `3000` | HTTP port of the API |
 | `TIME_SCALE` | `1` (demo `30`, tests `1000`) | Divides every retry delay |
-| `LANE_COUNT` | `4` locally, `16` in the design | Number of fresh-delivery shards |
 | `SECRETS_KEK_V1` | none | Base64 32-byte key that wraps endpoint secrets (AES-256-GCM) |
-| `SSRF_ALLOW_HOSTS` | empty | Dev-only allowlist so the Compose mock receiver passes the SSRF guard; keep empty in production |
 
 See [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md), section 6, "Locked parameters", for the full list of values.
 
@@ -175,7 +260,7 @@ See [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md), section 6, "Locked parameters", for 
 
 There is no deployment yet. The plan:
 
-- **Local and demo:** Docker Compose for the whole stack (Phase 1 onward), with graceful shutdown of 30 s (`stop_grace_period: 30s`) so in-flight deliveries finish.
+- **Local and demo:** Docker Compose for the whole stack (built, see [Full stack](#full-stack)), with graceful shutdown of 30 s (`stop_grace_period: 30s`) so in-flight work finishes.
 - **Not built, documented as the next phase:** Kubernetes (k3s) with Helm or Kustomize, GitLab CI/CD, dedicated queues and worker pools for heavy tenants, a partitioned outbox, and payload offloading.
 
 Production readiness notes from the design: three RabbitMQ nodes for quorum queues, network-level egress rules as defence in depth for SSRF, and a KMS-backed `KeyProvider` in place of the environment key.
@@ -184,7 +269,7 @@ Production readiness notes from the design: three RabbitMQ nodes for quorum queu
 
 | Phase | Goal |
 |---|---|
-| **1. Foundation and atomic ingestion** | Docker Compose, migrations, tenant, endpoint and subscription CRUD, `POST /v1/events` with idempotency, outbox relay, dispatcher, mock receiver |
+| **1. Foundation and atomic ingestion** (done) | Docker Compose, migrations, tenant, endpoint and subscription CRUD, `POST /v1/events` with idempotency, outbox relay, dispatcher, mock receiver |
 | **2. Delivery, retries and DLQ** | Delivery worker with signing and the SSRF-safe client, retry tiers, ack ordering, graceful shutdown, Mongo attempt log |
 | **3. Resilience and fairness** | Circuit breaker, token bucket and concurrency cap, sharded lanes, secret encryption and rotation, load test results |
 | **4. Dashboard, observability and demo** | React dashboard, live updates and replay, metrics and logs, results table, scripted three-scene demo |

@@ -1,0 +1,159 @@
+# The whole Phase 1 stack:  docker compose up --build
+# Then seed a tenant:       docker compose run --rm seed
+# See the README ("Full stack") for the demo path.
+name: wdp
+
+# Every application service runs the same image, built from the Dockerfile.
+x-app: &app
+  build:
+    context: .
+  image: wdp-app:local
+  # Longer than the 10 s HTTP timeout, so work in flight can finish on a stop.
+  stop_grace_period: 30s
+  environment: &env
+    DATABASE_URL: postgres://wdp:wdp@postgres:5432/wdp
+    REDIS_URL: redis://redis:6379
+    RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    BROKER_NAMESPACE: wdp
+    LANE_COUNT: "4"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: wdp
+      POSTGRES_PASSWORD: wdp
+      POSTGRES_DB: wdp
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wdp -d wdp"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Started now, used from Phase 2 on (the attempt log).
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      # Management UI, login guest / guest.
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+
+  # One-shot: applies the SQL migrations, then exits. Everything that uses
+  # Postgres waits for it.
+  migrate:
+    <<: *app
+    command: ["node", "apps/ops/dist/migrate.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["node", "apps/api/dist/main.js"]
+    environment:
+      <<: *env
+      PORT: "3000"
+      # Development only: lets the plain-http mock receiver be registered.
+      SSRF_ALLOW_HOSTS: mock-receiver
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Any route answers 401 without a key, which proves the app is up.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/v1/endpoints').then(r => process.exit(r.status === 401 ? 0 : 1), () => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  relay:
+    <<: *app
+    command: ["node", "apps/relay/dist/main.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  dispatcher:
+    <<: *app
+    command: ["node", "apps/dispatcher/dist/main.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # A stand-in for a customer's endpoint. Nothing calls it before Phase 2.
+  mock-receiver:
+    <<: *app
+    command: ["node", "apps/mock-receiver/dist/main.js"]
+    environment:
+      PORT: "4000"
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:4000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Not started by `up`: run it on demand with `docker compose run --rm seed`,
+  # optionally followed by `--tenant <name>`.
+  seed:
+    <<: *app
+    profiles: ["tools"]
+    entrypoint: ["node", "apps/ops/dist/seed.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  mongo-data:
+  rabbitmq-data:
