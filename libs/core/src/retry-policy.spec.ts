@@ -196,3 +196,75 @@ describe('RetryPolicy time scale and floor', () => {
     },
   );
 });
+
+describe('RetryPolicy.delays', () => {
+  it('lists the 21 distinct delays of 7 tiers x 3 buckets, ascending', () => {
+    expect(new RetryPolicy().delays()).toEqual([
+      4_000, 5_000, 6_000, 24_000, 30_000, 36_000, 240_000, 300_000, 360_000,
+      1_440_000, 1_800_000, 2_160_000, 5_760_000, 7_200_000, 8_640_000,
+      14_400_000, 18_000_000, 21_600_000, 28_800_000, 36_000_000, 43_200_000,
+    ]);
+  });
+
+  it('lists each delay once when a floor makes buckets share one: scale 1000, floor 20 ms', () => {
+    // The three buckets of the first tier (4, 5 and 6 ms) all floor to 20, so
+    // 21 delays become 19 queues. The 30 s tier stays apart: 24, 30 and 36.
+    expect(
+      new RetryPolicy({ timeScale: 1000, minDelayMs: 20 }).delays(),
+    ).toEqual([
+      20, 24, 30, 36, 240, 300, 360, 1_440, 1_800, 2_160, 5_760, 7_200, 8_640,
+      14_400, 18_000, 21_600, 28_800, 36_000, 43_200,
+    ]);
+  });
+
+  it('compresses the demo schedule: scale 30, floor 500 ms', () => {
+    expect(
+      new RetryPolicy({ timeScale: 30, minDelayMs: 500 }).delays(),
+    ).toEqual([
+      500, 800, 1_000, 1_200, 8_000, 10_000, 12_000, 48_000, 60_000, 72_000,
+      192_000, 240_000, 288_000, 480_000, 600_000, 720_000, 960_000, 1_200_000,
+      1_440_000,
+    ]);
+  });
+
+  it.each([
+    {},
+    { timeScale: 3 },
+    { timeScale: 7 },
+    { timeScale: 30, minDelayMs: 500 },
+    { timeScale: 1000, minDelayMs: 20 },
+  ])(
+    'contains every delay next() can return, so each one has a queue (%j)',
+    (options) => {
+      const policy = new RetryPolicy(options);
+      const queues = new Set(policy.delays());
+
+      for (const attempt of [1, 2, 3, 4, 5, 6, 7]) {
+        for (const r of [0, 0.5, 0.9]) {
+          const decision = policy.next(attempt, () => r);
+          expect(decision.action).toBe('retry');
+          if (decision.action === 'retry') {
+            expect(queues.has(decision.delay)).toBe(true);
+          }
+        }
+      }
+    },
+  );
+});
+
+describe('RetryPolicy.parkDelayMs', () => {
+  it('is the 5 s of the short delay queue', () => {
+    expect(new RetryPolicy().parkDelayMs).toBe(5_000);
+  });
+
+  it('is scaled and floored like a retry delay: scale 30, floor 500 ms', () => {
+    // 5000 / 30 is 167 ms, so the floor wins.
+    expect(
+      new RetryPolicy({ timeScale: 30, minDelayMs: 500 }).parkDelayMs,
+    ).toBe(500);
+  });
+
+  it('is scaled when above the floor: scale 10', () => {
+    expect(new RetryPolicy({ timeScale: 10 }).parkDelayMs).toBe(500);
+  });
+});

@@ -2,6 +2,7 @@ import { laneRoutingKey } from '@wdp/domain';
 import type { Channel } from 'amqplib';
 import {
   EVENT_PUBLISHED_ROUTING_KEY,
+  RETRY_READY_ROUTING_KEY,
   type TopologyNames,
   topologyNames,
 } from './names.js';
@@ -105,6 +106,94 @@ export async function declareDispatchRetryTopology(
       'x-dead-letter-routing-key': EVENT_PUBLISHED_ROUTING_KEY,
     },
   });
+  return names;
+}
+
+export interface RetryTopologyOptions {
+  /** Number of fresh-delivery lanes (`LANE_COUNT`). */
+  laneCount: number;
+  /**
+   * The effective delay of every retry tier queue, in ms, after scaling and
+   * floor (`RetryPolicy.delays()`). Repeats are fine: a floor can give several
+   * buckets one delay, and that queue is declared once.
+   */
+  retryDelaysMs: readonly number[];
+  /** How long a parked job waits before its lane (`RetryPolicy.parkDelayMs`). */
+  parkDelayMs: number;
+  namespace?: string;
+}
+
+function assertDelay(name: string, delayMs: number): void {
+  if (!Number.isInteger(delayMs) || delayMs < 1) {
+    throw new RangeError(`${name} must be a positive integer, got ${delayMs}`);
+  }
+}
+
+/**
+ * Declares where a delivery waits before another try, and where a parked job
+ * waits before its lane. Idempotent. Declared by the worker only. Calls
+ * `declareTopology` first, for the deliveries exchange and the lanes.
+ *
+ * - **Retry tiers:** one queue per delay. It has a fixed `x-message-ttl`, since
+ *   RabbitMQ expires a message only at the head of its queue, so a per-message
+ *   TTL would let a long wait hold up a short one. When the TTL runs out the
+ *   broker dead-letters the message to `retry.ready`, the one queue workers
+ *   consume retries from.
+ * - **Delay queues:** one per lane, so each can dead-letter by a fixed routing
+ *   key straight back to its own lane.
+ *
+ * The delay is part of every queue name, because RabbitMQ refuses to change the
+ * TTL of an existing queue: a new time scale makes new queues, and messages
+ * still waiting in the old ones run out as before. Neither kind of queue gets a
+ * delivery limit: nothing consumes them, messages only leave by expiring.
+ */
+export async function declareRetryTopology(
+  channel: Channel,
+  { laneCount, retryDelaysMs, parkDelayMs, namespace }: RetryTopologyOptions,
+): Promise<TopologyNames> {
+  if (retryDelaysMs.length === 0) {
+    throw new RangeError('retryDelaysMs must not be empty');
+  }
+  for (const delayMs of retryDelaysMs) {
+    assertDelay('every retry delay', delayMs);
+  }
+  assertDelay('parkDelayMs', parkDelayMs);
+
+  const names = await declareTopology(channel, { laneCount, namespace });
+
+  await channel.assertQueue(names.retryReadyQueue, {
+    durable: true,
+    arguments: quorumQueueArguments(names.deadLetterExchange),
+  });
+  await channel.bindQueue(
+    names.retryReadyQueue,
+    names.deliveriesExchange,
+    RETRY_READY_ROUTING_KEY,
+  );
+
+  for (const delayMs of new Set(retryDelaysMs)) {
+    await channel.assertQueue(names.retryTierQueue(delayMs), {
+      durable: true,
+      arguments: {
+        'x-queue-type': 'quorum',
+        'x-message-ttl': delayMs,
+        'x-dead-letter-exchange': names.deliveriesExchange,
+        'x-dead-letter-routing-key': RETRY_READY_ROUTING_KEY,
+      },
+    });
+  }
+
+  for (let lane = 0; lane < laneCount; lane++) {
+    await channel.assertQueue(names.parkQueue(parkDelayMs, lane), {
+      durable: true,
+      arguments: {
+        'x-queue-type': 'quorum',
+        'x-message-ttl': parkDelayMs,
+        'x-dead-letter-exchange': names.deliveriesExchange,
+        'x-dead-letter-routing-key': laneRoutingKey(lane),
+      },
+    });
+  }
   return names;
 }
 

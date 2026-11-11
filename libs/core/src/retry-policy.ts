@@ -9,6 +9,9 @@ export const RETRY_SCHEDULE_MS: readonly number[] = [
   36_000_000, // 10 h
 ];
 
+/** PRD: the short delay tier a parked job waits in, 5 s before scaling. */
+const PARK_DELAY_MS = 5_000;
+
 /** PRD: 7 retries after the first try, so 8 attempts in all. */
 export const MAX_ATTEMPTS = RETRY_SCHEDULE_MS.length + 1;
 
@@ -61,6 +64,29 @@ export class RetryPolicy {
   }
 
   /**
+   * Every delay `next()` can return, each once, shortest first: the TTLs of the
+   * retry tier queues. A floor can give several buckets, even tiers, one
+   * delay, so the list can be shorter than 21. Taken from the same formula as
+   * `next()`, so a decision always has a queue to go to.
+   */
+  delays(): number[] {
+    const all = RETRY_SCHEDULE_MS.flatMap((base) =>
+      JITTER_PERCENT.map((percent) => this.scaledDelay(base, percent)),
+    );
+    // Tiers and buckets both run from short to long, and a Set keeps insertion
+    // order, so the result is ascending without a sort.
+    return [...new Set(all)];
+  }
+
+  /**
+   * How long a job parked without using up an attempt (open circuit, endpoint
+   * over its cap) waits: the PRD's short delay tier, 5 s scaled like the rest.
+   */
+  get parkDelayMs(): number {
+    return this.scaledDelay(PARK_DELAY_MS, 100);
+  }
+
+  /**
    * `attempt` is the 1-based number of the attempt that just failed. `delay`
    * is in ms. `rng` returns a number in [0, 1) and picks the jitter bucket; it
    * is injected so the choice is reproducible, and only called for a retry.
@@ -80,15 +106,22 @@ export class RetryPolicy {
     const { bucket, percent } = pickBucket(rng);
     return {
       action: 'retry',
-      // One rounding at the end: the scaled delay is a whole number of ms, as
-      // queue names and TTLs need.
-      delay: Math.max(
-        this.minDelayMs,
-        Math.round((delay * percent) / 100 / this.timeScale),
-      ),
+      delay: this.scaledDelay(delay, percent),
       tier,
       bucket,
     };
+  }
+
+  /**
+   * One rounding at the end: the scaled delay is a whole number of ms, as queue
+   * names and TTLs need. The floor applies after scaling. Shared by `next()`
+   * and `delays()`, so the two cannot drift apart.
+   */
+  private scaledDelay(baseMs: number, percent: number): number {
+    return Math.max(
+      this.minDelayMs,
+      Math.round((baseMs * percent) / 100 / this.timeScale),
+    );
   }
 }
 
