@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.2
+**Version:** 1.3
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -183,7 +183,7 @@ Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and 
 - [ ] The creation response contains the secret, and later reads do not
 - [ ] Each endpoint gets a distinct secret
 
-### Task 10: SignatureService ⬜
+### Task 10: SignatureService ✅
 **Original Story:** 7
 **Scope:** `core`
 **Blocked by:** None
@@ -192,9 +192,9 @@ Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and 
 `sign(secrets[], id, timestamp, rawBody)` and `verify(...)`: HMAC-SHA256 over `id.timestamp.body`, several signatures during rotation, constant-time compare, 5-minute tolerance.
 
 **Acceptance Criteria:**
-- [ ] Known vectors match
-- [ ] A tampered body or an old timestamp fails verification
-- [ ] A header with several signatures verifies against any matching secret
+- [x] Known vectors match
+- [x] A tampered body or an old timestamp fails verification
+- [x] A header with several signatures verifies against any matching secret
 
 ### Task 11: SafeHttpClient limits ⬜
 **Original Story:** 25 (part)
