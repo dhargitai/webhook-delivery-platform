@@ -4,9 +4,9 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
-import { SafeHttpClient } from './safe-http-client.js';
+import type { AddressInfo, LookupFunction } from 'node:net';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SafeHttpClient, type HttpResult } from './safe-http-client.js';
 
 interface Received {
   headers: IncomingMessage['headers'];
@@ -274,6 +274,174 @@ describe('SafeHttpClient.post', () => {
     });
   });
 
+  describe('timeouts', () => {
+    const timed = new SafeHttpClient({
+      connectTimeoutMs: 50,
+      totalTimeoutMs: 300,
+    });
+    const never: LookupFunction = () => {
+      // Never calls back: the connect phase stalls, as with a black-holed host.
+    };
+
+    it('gives up when the connection is not made in time', async () => {
+      const { url, received } = await listen(answer(200));
+      const stalled = new SafeHttpClient({
+        connectTimeoutMs: 50,
+        totalTimeoutMs: 300,
+        lookup: never,
+      });
+
+      // A hostname, not the IP literal: Node only calls `lookup` for names.
+      const named = `http://receiver.invalid:${new URL(url).port}/hook`;
+
+      const result = await stalled.post(named, {}, '{}');
+
+      expect(result).toMatchObject({
+        outcome: 'failed',
+        kind: 'connect_timeout',
+      });
+      expect(result.latencyMs).toBeGreaterThanOrEqual(40);
+      expect(result.latencyMs).toBeLessThan(250);
+      expect(received).toHaveLength(0);
+    });
+
+    it('gives up on a receiver that accepts and never answers', async () => {
+      let serverSawClose: () => void = () => {};
+      const closed = new Promise<void>((resolve) => {
+        serverSawClose = resolve;
+      });
+      const { url } = await listen((res) => {
+        // Never responds.
+        res.on('close', serverSawClose);
+      });
+
+      const result = await timed.post(url, {}, '{}');
+
+      // The connection was made, so this is the total limit, not the connect one.
+      expect(result).toMatchObject({ outcome: 'failed', kind: 'timeout' });
+      expect(result.latencyMs).toBeGreaterThanOrEqual(250);
+      // The call is abandoned, not left holding a socket open.
+      await closed;
+    });
+
+    it('cuts a receiver that drips its body past the total limit', async () => {
+      const { url } = await listen((res) => {
+        res.writeHead(200);
+        const timer = setInterval(() => res.write('.'), 20);
+        res.on('close', () => clearInterval(timer));
+      });
+
+      const result = await timed.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ outcome: 'failed', kind: 'timeout' });
+    });
+
+    it('does not cut a response that is slower than the connect limit', async () => {
+      const { url } = await listen((res) => {
+        setTimeout(() => answer(200, 'late')(res), 150);
+      });
+
+      const result = await timed.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ outcome: 'success', snippet: 'late' });
+    });
+
+    it('connects through the given lookup', async () => {
+      const { url } = await listen(answer(200, 'via lookup'));
+      const resolving: LookupFunction = (_hostname, options, callback) => {
+        // Node asks for every address when it may try several families.
+        if (options.all) {
+          callback(null, [{ address: '127.0.0.1', family: 4 }]);
+        } else {
+          callback(null, '127.0.0.1', 4);
+        }
+      };
+      const viaLookup = new SafeHttpClient({ lookup: resolving });
+      const port = new URL(url).port;
+
+      const result = await viaLookup.post(
+        `http://receiver.invalid:${port}/hook`,
+        {},
+        '{}',
+      );
+
+      expect(result).toMatchObject({
+        outcome: 'success',
+        snippet: 'via lookup',
+      });
+    });
+
+    it('leaves no timer running after a connection that failed', async () => {
+      const { url } = await listen(answer(200));
+      const [server] = servers.splice(0);
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      const timers = () =>
+        process.getActiveResourcesInfo().filter((name) => name === 'Timeout')
+          .length;
+      const before = timers();
+
+      const result = await timed.post(url, {}, '{}');
+      // Shorter than both limits: a leaked timer is still pending here.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(result).toMatchObject({ kind: 'network_error' });
+      expect(timers()).toBeLessThanOrEqual(before);
+    });
+
+    describe('defaults', () => {
+      const fakeTimers = () =>
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('gives up connecting after 3 s', async () => {
+        fakeTimers();
+        let result: HttpResult | undefined;
+        void new SafeHttpClient({ lookup: never })
+          .post('http://receiver.invalid:9/hook', {}, '{}')
+          .then((outcome) => (result = outcome));
+
+        await vi.advanceTimersByTimeAsync(2_999);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(result).toMatchObject({ kind: 'connect_timeout' });
+      });
+
+      it('gives up on the whole call after 10 s', async () => {
+        let accepted: () => void = () => {};
+        const arrived = new Promise<void>((resolve) => {
+          accepted = resolve;
+        });
+        const { url } = await listen(() => accepted());
+        fakeTimers();
+        let result: HttpResult | undefined;
+        void client.post(url, {}, '{}').then((outcome) => (result = outcome));
+        await arrived;
+
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(result).toMatchObject({ kind: 'timeout' });
+      });
+    });
+
+    it('leaves no timer running after a call', async () => {
+      const { url } = await listen(answer(200));
+      const timers = () =>
+        process.getActiveResourcesInfo().filter((name) => name === 'Timeout')
+          .length;
+      const before = timers();
+
+      await timed.post(url, {}, '{}');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(timers()).toBeLessThanOrEqual(before);
+    });
+  });
+
   it('reports a refused connection as a network error', async () => {
     const { url } = await listen(answer(200));
     // Closing the only listener leaves a port nothing answers on.
@@ -305,4 +473,37 @@ describe('SafeHttpClient options', () => {
       );
     },
   );
+});
+
+describe('SafeHttpClient timeout options', () => {
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses %s as connectTimeoutMs',
+    (value) => {
+      expect(() => new SafeHttpClient({ connectTimeoutMs: value })).toThrow(
+        RangeError,
+      );
+    },
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses %s as totalTimeoutMs',
+    (value) => {
+      expect(() => new SafeHttpClient({ totalTimeoutMs: value })).toThrow(
+        RangeError,
+      );
+    },
+  );
+
+  it('refuses a connect limit above the total limit', () => {
+    // It could never fire: the total limit would always cut the call first.
+    expect(
+      () => new SafeHttpClient({ connectTimeoutMs: 500, totalTimeoutMs: 100 }),
+    ).toThrow(RangeError);
+  });
+
+  it('accepts a connect limit equal to the total limit', () => {
+    expect(
+      () => new SafeHttpClient({ connectTimeoutMs: 100, totalTimeoutMs: 100 }),
+    ).not.toThrow();
+  });
 });
