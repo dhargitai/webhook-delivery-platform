@@ -73,19 +73,19 @@ Each request carries `webhook-id` (stable across retries), `webhook-timestamp` (
 
 ## Tech stack
 
-| Area | Choice |
-|---|---|
-| Language | TypeScript (strict, ESM, `nodenext`) |
-| Backend | Node.js 24, NestJS 12 |
-| Package manager | Bun workspaces (Node is the runtime) |
-| Config and events store | PostgreSQL |
-| Attempt log | MongoDB (started by Compose, used from Phase 2) |
-| Fast state | Redis (the ingest rate limit so far) |
-| Messaging | RabbitMQ with quorum queues |
-| Frontend | React, TanStack Query, Redux, Redux-saga, TanStack Virtual (planned) |
-| Realtime | Socket.IO gateway, RxJS batching (planned) |
-| Testing | Vitest, Testcontainers |
-| Tooling | oxlint (type-aware), Prettier, Nest's default Logger and prom-client (planned) |
+| Area                    | Choice                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| Language                | TypeScript (strict, ESM, `nodenext`)                                           |
+| Backend                 | Node.js 24, NestJS 12                                                          |
+| Package manager         | Bun workspaces (Node is the runtime)                                           |
+| Config and events store | PostgreSQL                                                                     |
+| Attempt log             | MongoDB (started by Compose, used from Phase 2)                                |
+| Fast state              | Redis (the ingest rate limit so far)                                           |
+| Messaging               | RabbitMQ with quorum queues                                                    |
+| Frontend                | React, TanStack Query, Redux, Redux-saga, TanStack Virtual (planned)           |
+| Realtime                | Socket.IO gateway, RxJS batching (planned)                                     |
+| Testing                 | Vitest, Testcontainers                                                         |
+| Tooling                 | oxlint (type-aware), Prettier, Nest's default Logger and prom-client (planned) |
 
 ## Repository layout
 
@@ -177,13 +177,13 @@ Within a second the outbox is empty and one job sits on a `wdp.fresh.shard.NN` q
 
 The mock receiver does nothing until Phase 2's worker calls it, but it can already be driven by hand. It answers `POST /hook` (any path below it), and the query string sets its behaviour:
 
-| Query | Effect |
-|---|---|
-| `fail=0.3` | Fails about 30% of requests (default 0) |
-| `failStatus=503` | The status of a failure (default 500) |
-| `status=429` | The status of every request that does not fail (default 200) |
-| `latency=200` | Waits 200 ms before answering (up to 60000) |
-| `hang=1` | Never answers, to exercise the 10 s timeout |
+| Query            | Effect                                                       |
+| ---------------- | ------------------------------------------------------------ |
+| `fail=0.3`       | Fails about 30% of requests (default 0)                      |
+| `failStatus=503` | The status of a failure (default 500)                        |
+| `status=429`     | The status of every request that does not fail (default 200) |
+| `latency=200`    | Waits 200 ms before answering (up to 60000)                  |
+| `hang=1`         | Never answers, to exercise the 10 s timeout                  |
 
 `GET /stats` counts what arrived (including deliveries per `webhook-id`, so a retry shows as a repeat), `POST /stats/reset` clears it, and `GET /health` is its health check. Bad values are refused with a 400 that names the parameter. `docker compose down -v` removes the stack and its data.
 
@@ -191,19 +191,19 @@ The mock receiver does nothing until Phase 2's worker calls it, but it can alrea
 
 Run from the repository root.
 
-| Script | What it does |
-|---|---|
-| `bun run build` | Builds all libraries and apps in dependency order |
-| `bun run typecheck` | Type-checks `apps/`, `libs/` and `test/` with no emit |
-| `bun run db:migrate` | Applies the SQL migrations to `DATABASE_URL`. Run `bun run build` first; Compose does this for you |
-| `bun run db:seed` | Creates a tenant and prints an API key, `-- --tenant <name>` to name it. Run `bun run build` first; with Compose use `docker compose run --rm seed` |
-| `bun run lint` | Runs oxlint with type-aware rules |
-| `bun run format` | Formats sources with Prettier |
-| `bun run test` | Runs unit tests (`*.spec.ts`) |
-| `bun run test:watch` | Runs unit tests in watch mode |
-| `bun run test:cov` | Runs unit tests with coverage |
-| `bun run test:integration` | Runs integration tests (`*.int-spec.ts`) against real Postgres, Redis and RabbitMQ. Needs Docker |
-| `bun run test:e2e` | Runs end-to-end tests (`*.e2e-spec.ts`) against the real app. Needs Docker |
+| Script                     | What it does                                                                                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run build`            | Builds all libraries and apps in dependency order                                                                                                   |
+| `bun run typecheck`        | Type-checks `apps/`, `libs/` and `test/` with no emit                                                                                               |
+| `bun run db:migrate`       | Applies the SQL migrations to `DATABASE_URL`. Run `bun run build` first; Compose does this for you                                                  |
+| `bun run db:seed`          | Creates a tenant and prints an API key, `-- --tenant <name>` to name it. Run `bun run build` first; with Compose use `docker compose run --rm seed` |
+| `bun run lint`             | Runs oxlint with type-aware rules                                                                                                                   |
+| `bun run format`           | Formats sources with Prettier                                                                                                                       |
+| `bun run test`             | Runs unit tests (`*.spec.ts`)                                                                                                                       |
+| `bun run test:watch`       | Runs unit tests in watch mode                                                                                                                       |
+| `bun run test:cov`         | Runs unit tests with coverage                                                                                                                       |
+| `bun run test:integration` | Runs integration tests (`*.int-spec.ts`) against real Postgres, Redis and RabbitMQ. Needs Docker                                                    |
+| `bun run test:e2e`         | Runs end-to-end tests (`*.e2e-spec.ts`) against the real app. Needs Docker                                                                          |
 
 Per-app scripts (`start`, `start:dev`, `start:debug`, `start:prod`) live in each app's `package.json` and run with `bun run --filter @wdp/api <script>` (or `@wdp/relay`, `@wdp/dispatcher`).
 
@@ -211,58 +211,58 @@ Per-app scripts (`start`, `start:dev`, `start:debug`, `start:prod`) live in each
 
 Tests assert external behaviour, and each one exists to catch a regression: it must fail when the bug it targets is present and pass when it is fixed.
 
-| Level | Targets |
-|---|---|
-| Unit | Retry policy, signature service, SSRF guard, delivery state machine, cursor codec. Pure or nearly pure, table-driven, no containers. |
+| Level                        | Targets                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit                         | Retry policy, signature service, SSRF guard, delivery state machine, cursor codec. Pure or nearly pure, table-driven, no containers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Integration (Testcontainers) | Built: idempotent ingest under concurrent duplicates, the schema's constraints, endpoint and subscription queries, the rate limiter's Lua script against real Redis, the broker topology including the retry tier and delay queues (a message returns to `retry.ready` after its TTL, a parked job to its own lane), confirmed publishing and consumer ack ordering against real RabbitMQ (redelivery after a crash, the delivery limit, graceful stop), the outbox relay (crash between publishing and committing, `SKIP LOCKED` with two relays, no false "published" when nothing receives the event), and the dispatcher (fan-out onto the right lanes, stable job ids across redelivery, retry of transient failures after a pause, dead-lettering with the reason once the attempts run out, immediate dead-lettering of malformed events, tenant isolation). Planned: circuit breaker, worker ack ordering. Postgres, Redis and RabbitMQ start once per run; each spec gets its own migrated database, unique keys, or its own exchange and queue namespace. |
-| End-to-end | Built: the HTTP API against the real app (auth, ingest, idempotency, rate limiting, endpoints and subscriptions, tenant isolation); the relay app (starts, publishes, shuts down cleanly); and the whole Phase 1 pipeline with the real apps (`POST /v1/events` through the relay and dispatcher to one job per subscribed endpoint, including a late-registered endpoint and finishing the event in flight on shutdown). Planned: event delivered to the mock receiver, attempt visible through the API, a failing receiver leading to retries, the breaker opening, recovery and success. The same script is the demo. |
+| End-to-end                   | Built: the HTTP API against the real app (auth, ingest, idempotency, rate limiting, endpoints and subscriptions, tenant isolation); the relay app (starts, publishes, shuts down cleanly); and the whole Phase 1 pipeline with the real apps (`POST /v1/events` through the relay and dispatcher to one job per subscribed endpoint, including a late-registered endpoint and finishing the event in flight on shutdown). Planned: event delivered to the mock receiver, attempt visible through the API, a failing receiver leading to retries, the breaker opening, recovery and success. The same script is the demo.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Configuration
 
 The API validates these at boot and refuses to start if one is invalid or a required one is missing (see `.env.example`):
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `3000` | HTTP port of the API |
-| `DATABASE_URL` | required | Postgres connection string |
-| `REDIS_URL` | required | Redis connection string |
-| `INGEST_RATE_PER_SECOND` | `100` | Per-tenant ingest limit, sustained |
-| `INGEST_BURST` | `200` | Per-tenant ingest limit, bucket size |
-| `SSRF_ALLOW_HOSTS` | empty | Comma-separated hosts that may be registered as endpoints over plain http and any port. Development only, so the Compose mock receiver can be used; keep empty in production. The connect-time SSRF guard is built in `@wdp/core`; the worker applies it, with this same list, from Task 14 |
+| Variable                 | Default  | Purpose                                                                                                                                                                                                                                                                                     |
+| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                   | `3000`   | HTTP port of the API                                                                                                                                                                                                                                                                        |
+| `DATABASE_URL`           | required | Postgres connection string                                                                                                                                                                                                                                                                  |
+| `REDIS_URL`              | required | Redis connection string                                                                                                                                                                                                                                                                     |
+| `INGEST_RATE_PER_SECOND` | `100`    | Per-tenant ingest limit, sustained                                                                                                                                                                                                                                                          |
+| `INGEST_BURST`           | `200`    | Per-tenant ingest limit, bucket size                                                                                                                                                                                                                                                        |
+| `SSRF_ALLOW_HOSTS`       | empty    | Comma-separated hosts that may be registered as endpoints over plain http and any port. Development only, so the Compose mock receiver can be used; keep empty in production. The connect-time SSRF guard is built in `@wdp/core`; the worker applies it, with this same list, from Task 14 |
 
 The worker reads one variable so far:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `3001` | HTTP port of `GET /status` |
+| Variable | Default | Purpose                    |
+| -------- | ------- | -------------------------- |
+| `PORT`   | `3001`  | HTTP port of `GET /status` |
 
 The relay reads `DATABASE_URL` too, plus:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `RABBITMQ_URL` | required | RabbitMQ connection string |
-| `BROKER_NAMESPACE` | `wdp` | Prefix of every exchange and queue; shared by all services of a deployment |
-| `RELAY_BATCH_SIZE` | `200` | Events taken per batch |
-| `RELAY_POLL_INTERVAL_MS` | `100` | Pause after a batch that was not full |
-| `RELAY_CONFIRM_TIMEOUT_MS` | `5000` | How long to wait for the broker's confirm |
-| `RELAY_ERROR_BACKOFF_MS` | `1000` | Pause after a failed run |
+| Variable                   | Default  | Purpose                                                                    |
+| -------------------------- | -------- | -------------------------------------------------------------------------- |
+| `RABBITMQ_URL`             | required | RabbitMQ connection string                                                 |
+| `BROKER_NAMESPACE`         | `wdp`    | Prefix of every exchange and queue; shared by all services of a deployment |
+| `RELAY_BATCH_SIZE`         | `200`    | Events taken per batch                                                     |
+| `RELAY_POLL_INTERVAL_MS`   | `100`    | Pause after a batch that was not full                                      |
+| `RELAY_CONFIRM_TIMEOUT_MS` | `5000`   | How long to wait for the broker's confirm                                  |
+| `RELAY_ERROR_BACKOFF_MS`   | `1000`   | Pause after a failed run                                                   |
 
 The dispatcher reads `DATABASE_URL`, `RABBITMQ_URL` and `BROKER_NAMESPACE` too, plus:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `LANE_COUNT` | `4` | Number of fresh-delivery lanes (16 in the design). Changing it remaps endpoints to lanes, so drain the queues first |
-| `DISPATCHER_PREFETCH` | `20` | Events handled at once |
-| `DISPATCHER_CONFIRM_TIMEOUT_MS` | `5000` | How long to wait for the broker's confirm |
-| `DISPATCHER_RETRY_DELAY_MS` | `5000` | How long a failed dispatch waits in the retry queue before the next try. Part of the queue's name (`<ns>.dispatch.retry.<ms>`), so changing it makes a new queue |
-| `DISPATCHER_MAX_ATTEMPTS` | `10` | Dispatch tries per event, the first included. After the last, the event is dead-lettered with `x-failure-kind` and `x-failure-reason` headers |
+| Variable                        | Default | Purpose                                                                                                                                                          |
+| ------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LANE_COUNT`                    | `4`     | Number of fresh-delivery lanes (16 in the design). Changing it remaps endpoints to lanes, so drain the queues first                                              |
+| `DISPATCHER_PREFETCH`           | `20`    | Events handled at once                                                                                                                                           |
+| `DISPATCHER_CONFIRM_TIMEOUT_MS` | `5000`  | How long to wait for the broker's confirm                                                                                                                        |
+| `DISPATCHER_RETRY_DELAY_MS`     | `5000`  | How long a failed dispatch waits in the retry queue before the next try. Part of the queue's name (`<ns>.dispatch.retry.<ms>`), so changing it makes a new queue |
+| `DISPATCHER_MAX_ATTEMPTS`       | `10`    | Dispatch tries per event, the first included. After the last, the event is dead-lettered with `x-failure-kind` and `x-failure-reason` headers                    |
 
 The PRD locks further parameters, which become environment variables as each feature lands:
 
-| Variable | Planned default | Purpose |
-|---|---|---|
-| `TIME_SCALE` | `1` (demo `30`, tests `1000`) | Divides every retry delay |
-| `SECRETS_KEK_V1` | none | Base64 32-byte key that wraps endpoint secrets (AES-256-GCM) |
+| Variable         | Planned default               | Purpose                                                      |
+| ---------------- | ----------------------------- | ------------------------------------------------------------ |
+| `TIME_SCALE`     | `1` (demo `30`, tests `1000`) | Divides every retry delay                                    |
+| `SECRETS_KEK_V1` | none                          | Base64 32-byte key that wraps endpoint secrets (AES-256-GCM) |
 
 See [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md), section 6, "Locked parameters", for the full list of values.
 
@@ -277,12 +277,12 @@ Production readiness notes from the design: three RabbitMQ nodes for quorum queu
 
 ## Roadmap
 
-| Phase | Goal |
-|---|---|
+| Phase                                         | Goal                                                                                                                                            |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | **1. Foundation and atomic ingestion** (done) | Docker Compose, migrations, tenant, endpoint and subscription CRUD, `POST /v1/events` with idempotency, outbox relay, dispatcher, mock receiver |
-| **2. Delivery, retries and DLQ** | Delivery worker with signing and the SSRF-safe client, retry tiers, ack ordering, graceful shutdown, Mongo attempt log |
-| **3. Resilience and fairness** | Circuit breaker, token bucket and concurrency cap, sharded lanes, secret encryption and rotation, load test results |
-| **4. Dashboard, observability and demo** | React dashboard, live updates and replay, metrics and logs, results table, scripted three-scene demo |
+| **2. Delivery, retries and DLQ**              | Delivery worker with signing and the SSRF-safe client, retry tiers, ack ordering, graceful shutdown, Mongo attempt log                          |
+| **3. Resilience and fairness**                | Circuit breaker, token bucket and concurrency cap, sharded lanes, secret encryption and rotation, load test results                             |
+| **4. Dashboard, observability and demo**      | React dashboard, live updates and replay, metrics and logs, results table, scripted three-scene demo                                            |
 
 The three demo scenes: (1) kill the receiver and watch retries, the breaker opening and closing, and deliveries resuming; (2) kill a worker mid-delivery and lose nothing; (3) send the same `Idempotency-Key` twice and get one event.
 

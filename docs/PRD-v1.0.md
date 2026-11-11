@@ -27,12 +27,12 @@ This is a **learning and portfolio project**. It is designed for a realistic pro
 
 **Users**
 
-| Persona | Technical comfort | Key pain points |
-|---|---|---|
-| **Tenant developer** (publishes events, registers endpoints) | High | Lost events, duplicate deliveries, no idea why a delivery failed, wants safe signature verification |
-| **Tenant operator / support** (watches the dashboard) | Medium | Needs to see failures quickly, filter by endpoint, replay failed events without a developer |
-| **Platform operator** (the demo audience, "me") | High | Noisy tenants, retry storms, dead endpoints eating capacity, security exposure from user-supplied URLs |
-| **Receiver developer** (verifies webhooks) | High | Needs a documented signature scheme, a replay window, and a stable id to deduplicate on |
+| Persona                                                      | Technical comfort | Key pain points                                                                                        |
+| ------------------------------------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------ |
+| **Tenant developer** (publishes events, registers endpoints) | High              | Lost events, duplicate deliveries, no idea why a delivery failed, wants safe signature verification    |
+| **Tenant operator / support** (watches the dashboard)        | Medium            | Needs to see failures quickly, filter by endpoint, replay failed events without a developer            |
+| **Platform operator** (the demo audience, "me")              | High              | Noisy tenants, retry storms, dead endpoints eating capacity, security exposure from user-supplied URLs |
+| **Receiver developer** (verifies webhooks)                   | High              | Needs a documented signature scheme, a replay window, and a stable id to deduplicate on                |
 
 ## 3. MVP Scope
 
@@ -69,19 +69,19 @@ This is a **learning and portfolio project**. It is designed for a realistic pro
 ### Tenant developer
 
 1. As a tenant developer, I want to `POST /v1/events` with an event type and JSON payload, so that all my subscribed endpoints receive it.
-   *Example:* `POST /v1/events {"type":"invoice.paid","payload":{"invoice":"INV-42"}}` returns `202 {"event_id":"018f..."}`.
+   _Example:_ `POST /v1/events {"type":"invoice.paid","payload":{"invoice":"INV-42"}}` returns `202 {"event_id":"018f..."}`.
 2. As a tenant developer, I want to send an `Idempotency-Key` header, so that retrying a request after a network error never creates a second event.
-   *Example:* the same key sent twice returns the same `event_id`; the same key with a different body returns `422`.
+   _Example:_ the same key sent twice returns the same `event_id`; the same key with a different body returns `422`.
 3. As a tenant developer, I want to register an endpoint URL and subscribe it to event types, so that I control who receives what.
-   *Example:* endpoint `https://hooks.acme.test/in` subscribed to `invoice.paid` and `invoice.failed`.
+   _Example:_ endpoint `https://hooks.acme.test/in` subscribed to `invoice.paid` and `invoice.failed`.
 4. As a tenant developer, I want each endpoint to have a signing secret, so that I can verify requests really came from the platform.
-   *Example:* the secret is shown once at creation, as `whsec_...`.
+   _Example:_ the secret is shown once at creation, as `whsec_...`.
 5. As a tenant developer, I want to rotate an endpoint's secret with an overlap window, so that I can deploy the new secret without dropping deliveries.
-   *Example:* for 24 h each request carries two signatures, one per secret.
+   _Example:_ for 24 h each request carries two signatures, one per secret.
 6. As a tenant developer, I want rejected URLs to be explained, so that I can fix them.
-   *Example:* registering `https://169.254.169.254/` returns `422 url_not_allowed: resolves to a link-local address`.
+   _Example:_ registering `https://169.254.169.254/` returns `422 url_not_allowed: resolves to a link-local address`.
 7. As a tenant developer, I want a documented verification algorithm with a timestamp tolerance, so that replayed captures of old requests are rejected.
-   *Example:* reject if `webhook-timestamp` is more than 5 minutes old.
+   _Example:_ reject if `webhook-timestamp` is more than 5 minutes old.
 8. As a tenant developer, I want every retry of the same event to carry the same `webhook-id`, so that my receiver can deduplicate.
 
 ### Tenant operator
@@ -90,7 +90,7 @@ This is a **learning and portfolio project**. It is designed for a realistic pro
 10. As a tenant operator, I want to filter the log by endpoint, status and event id, so that I can find a specific problem in millions of rows.
 11. As a tenant operator, I want to scroll through the log without waiting for page loads or seeing the UI freeze, so that large histories stay usable.
 12. As a tenant operator, I want new attempts to appear live, without losing my scroll position, so that I can watch an incident unfold.
-    *Example:* a "12 new" pill appears; clicking it prepends them.
+    _Example:_ a "12 new" pill appears; clicking it prepends them.
 13. As a tenant operator, I want to replay a failed delivery or a whole event with one click, so that I can recover after the receiver is fixed.
 14. As a tenant operator, I want to bulk-replay failed events and be able to cancel it, so that one mistake doesn't trigger a flood.
 15. As a tenant operator, I want to see an endpoint's circuit status (closed, open, half-open), so that I understand why deliveries are paused.
@@ -101,12 +101,12 @@ This is a **learning and portfolio project**. It is designed for a realistic pro
 17. As the platform operator, I want first attempts to run within 5 s at p99 even when retries are backed up, so that the SLA holds during incidents.
 18. As the platform operator, I want a per-tenant ingest rate limit that returns `429` with `Retry-After`, so that one tenant can't overload the broker.
 19. As the platform operator, I want a per-endpoint concurrency cap, so that one slow endpoint can't occupy all worker slots.
-    *Example:* an endpoint hanging to its 10 s timeout may hold at most 20 slots.
+    _Example:_ an endpoint hanging to its 10 s timeout may hold at most 20 slots.
 20. As the platform operator, I want a circuit breaker that stops calling a dead endpoint and probes it for recovery, so that capacity isn't wasted and the receiver isn't hammered.
 21. As the platform operator, I want retries scheduled with exponential backoff and jitter, so that a recovered receiver doesn't get a synchronized spike.
 22. As the platform operator, I want permanently failed deliveries to land in a DLQ with the failure reason, so that they can be inspected and replayed.
 23. As the platform operator, I want a worker that dies mid-delivery to lose nothing, so that crashes are survivable.
-    *Example:* kill a worker during a slow request; the job is redelivered and the receiver sees the same `webhook-id`.
+    _Example:_ kill a worker during a slow request; the job is redelivered and the receiver sees the same `webhook-id`.
 24. As the platform operator, I want workers to shut down gracefully on SIGTERM, so that deploys don't abandon in-flight deliveries.
 25. As the platform operator, I want every outbound request to be SSRF-safe at connect time, so that DNS rebinding or redirects can't reach internal hosts.
 26. As the platform operator, I want structured logs with a correlation id from ingestion to each attempt, so that an event can be traced across services.
@@ -142,18 +142,18 @@ flowchart LR
 
 Each module hides substantial logic behind a small, stable, testable interface.
 
-| Module | Interface (sketch) | Hides |
-|---|---|---|
-| **RetryPolicy** | `next(attempt, now, rng) -> {action: retry \| dead, delay, tier}` | Schedule table, jitter, time-scale factor for demos, attempt budget. Pure function |
-| **SignatureService** | `sign(secrets[], id, timestamp, rawBody) -> header`; `verify(header, id, timestamp, body, secrets[], now)` | HMAC-SHA256 over `id.timestamp.body`, multiple secrets during rotation, constant-time comparison, tolerance window |
-| **SsrfGuard / SafeHttpClient** | `post(url, headers, body, limits) -> Result` | DNS resolution, IP deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), IP pinning with correct SNI/Host, no redirects, connect and total timeouts, response cap |
-| **CircuitBreaker** | `allow(endpointId) -> allow \| deny \| probe`; `record(endpointId, outcome)` | Redis state machine (closed, open, half-open), thresholds, single-probe election, cooldown |
-| **EndpointLimiter** | `acquire(endpointId) -> Permit \| Denied`; `release(permit)` | Concurrency semaphore and token bucket in Redis (atomic scripts), expiry of leaked permits |
-| **DeliveryStateMachine** (domain) | `Delivery.recordAttempt(result) -> events`, `Delivery.replay()` | Legal states and transitions (pending, in-flight, succeeded, retrying, dead), invariants such as attempt budget |
-| **OutboxRelay** | `runOnce() -> publishedCount` | Batch selection with `SKIP LOCKED`, publisher confirms, marking `published_at`, crash-safe republish |
-| **IdempotentIngest** | `accept(tenant, key, body) -> {event_id, created}` | The idempotency decision table (new, duplicate, conflicting payload) inside one transaction |
-| **LaneRouter** | `lane(delivery) -> routingKey` | Hash sharding by endpoint, fresh vs retry vs delay lanes |
-| **CursorCodec** | `encode({ts,id})`, `decode(token)`; filter-to-query builder | Opaque cursor format and tamper handling, keyset query construction |
+| Module                            | Interface (sketch)                                                                                         | Hides                                                                                                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **RetryPolicy**                   | `next(attempt, now, rng) -> {action: retry \| dead, delay, tier}`                                          | Schedule table, jitter, time-scale factor for demos, attempt budget. Pure function                                                                                                   |
+| **SignatureService**              | `sign(secrets[], id, timestamp, rawBody) -> header`; `verify(header, id, timestamp, body, secrets[], now)` | HMAC-SHA256 over `id.timestamp.body`, multiple secrets during rotation, constant-time comparison, tolerance window                                                                   |
+| **SsrfGuard / SafeHttpClient**    | `post(url, headers, body, limits) -> Result`                                                               | DNS resolution, IP deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), IP pinning with correct SNI/Host, no redirects, connect and total timeouts, response cap |
+| **CircuitBreaker**                | `allow(endpointId) -> allow \| deny \| probe`; `record(endpointId, outcome)`                               | Redis state machine (closed, open, half-open), thresholds, single-probe election, cooldown                                                                                           |
+| **EndpointLimiter**               | `acquire(endpointId) -> Permit \| Denied`; `release(permit)`                                               | Concurrency semaphore and token bucket in Redis (atomic scripts), expiry of leaked permits                                                                                           |
+| **DeliveryStateMachine** (domain) | `Delivery.recordAttempt(result) -> events`, `Delivery.replay()`                                            | Legal states and transitions (pending, in-flight, succeeded, retrying, dead), invariants such as attempt budget                                                                      |
+| **OutboxRelay**                   | `runOnce() -> publishedCount`                                                                              | Batch selection with `SKIP LOCKED`, publisher confirms, marking `published_at`, crash-safe republish                                                                                 |
+| **IdempotentIngest**              | `accept(tenant, key, body) -> {event_id, created}`                                                         | The idempotency decision table (new, duplicate, conflicting payload) inside one transaction                                                                                          |
+| **LaneRouter**                    | `lane(delivery) -> routingKey`                                                                             | Hash sharding by endpoint, fresh vs retry vs delay lanes                                                                                                                             |
+| **CursorCodec**                   | `encode({ts,id})`, `decode(token)`; filter-to-query builder                                                | Opaque cursor format and tamper handling, keyset query construction                                                                                                                  |
 
 ### Design patterns used in the project
 
@@ -213,16 +213,16 @@ Values below are the agreed defaults. Each is an environment variable or constan
 
 #### Ingest and outbox
 
-| Parameter | Value |
-|---|---|
-| Max request body / event payload | 64 KB. Delivery messages carry the payload inline for the MVP; offloading is the scale-up path |
-| `Idempotency-Key` | 1 to 255 characters; same key, same request hash returns the original `event_id` |
-| `events` row retention | 30 days (matches the attempt log, so replay always finds its payload); a daily batched purge of published rows older than that |
-| Per-tenant ingest limit | Token bucket in Redis: 100 events/s sustained, burst 200; over the limit returns `429` with `Retry-After` |
-| Relay poll interval | 100 ms; a full batch loops immediately without sleeping |
-| Relay batch size | 200 rows, `FOR UPDATE SKIP LOCKED`; publisher-confirm timeout 5 s |
-| Correlation id | The `event_id` (UUIDv7), carried in every message and log line, plus `delivery_id` per delivery |
-| API keys | `whk_<8-char prefix>_<32 random bytes, base64url>`; store the prefix and a SHA-256 hash (the secret has high entropy, so no slow hash); constant-time compare |
+| Parameter                        | Value                                                                                                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Max request body / event payload | 64 KB. Delivery messages carry the payload inline for the MVP; offloading is the scale-up path                                                                |
+| `Idempotency-Key`                | 1 to 255 characters; same key, same request hash returns the original `event_id`                                                                              |
+| `events` row retention           | 30 days (matches the attempt log, so replay always finds its payload); a daily batched purge of published rows older than that                                |
+| Per-tenant ingest limit          | Token bucket in Redis: 100 events/s sustained, burst 200; over the limit returns `429` with `Retry-After`                                                     |
+| Relay poll interval              | 100 ms; a full batch loops immediately without sleeping                                                                                                       |
+| Relay batch size                 | 200 rows, `FOR UPDATE SKIP LOCKED`; publisher-confirm timeout 5 s                                                                                             |
+| Correlation id                   | The `event_id` (UUIDv7), carried in every message and log line, plus `delivery_id` per delivery                                                               |
+| API keys                         | `whk_<8-char prefix>_<32 random bytes, base64url>`; store the prefix and a SHA-256 hash (the secret has high entropy, so no slow hash); constant-time compare |
 
 #### Retry policy
 
@@ -244,29 +244,29 @@ stateDiagram-v2
     HalfOpen --> Open: probe fails (level + 1)
 ```
 
-| Parameter | Value |
-|---|---|
-| Window | Sliding 60 s, a Redis sorted set scored by timestamp; trimmed on each write and capped at 1000 members |
-| Trip rule | Failure rate of at least 50% with at least 20 samples in the window |
-| Counts as breaker failure | Timeout, connection or SSRF-block error, 5xx, 408, 429 |
-| Counts as breaker success | 2xx and any other 4xx (the endpoint is reachable; the delivery itself still fails and retries) |
-| Cooldown | Exponential: 30 s × 2^level, level 0 to 5, capped at 10 min, with ±20% jitter, stored as `openUntil` |
-| Open to half-open | Lazy: evaluated inside `allow()` when `now >= openUntil`, no timer |
-| Probe election | `SET cb:{id}:probe <workerId> NX PX 15000` (above the 10 s HTTP timeout, so a probe worker that dies can't wedge the circuit); the winner probes, the others are denied |
-| Atomicity | `record()` (add to window, trim, count, compare, change state) is one Lua script; the probe election is the single `SET NX PX` command |
-| Denied delivery | Re-parked in the short delay tier (5 s, scaled) without calling the endpoint and without consuming an attempt |
+| Parameter                 | Value                                                                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Window                    | Sliding 60 s, a Redis sorted set scored by timestamp; trimmed on each write and capped at 1000 members                                                                  |
+| Trip rule                 | Failure rate of at least 50% with at least 20 samples in the window                                                                                                     |
+| Counts as breaker failure | Timeout, connection or SSRF-block error, 5xx, 408, 429                                                                                                                  |
+| Counts as breaker success | 2xx and any other 4xx (the endpoint is reachable; the delivery itself still fails and retries)                                                                          |
+| Cooldown                  | Exponential: 30 s × 2^level, level 0 to 5, capped at 10 min, with ±20% jitter, stored as `openUntil`                                                                    |
+| Open to half-open         | Lazy: evaluated inside `allow()` when `now >= openUntil`, no timer                                                                                                      |
+| Probe election            | `SET cb:{id}:probe <workerId> NX PX 15000` (above the 10 s HTTP timeout, so a probe worker that dies can't wedge the circuit); the winner probes, the others are denied |
+| Atomicity                 | `record()` (add to window, trim, count, compare, change state) is one Lua script; the probe election is the single `SET NX PX` command                                  |
+| Denied delivery           | Re-parked in the short delay tier (5 s, scaled) without calling the endpoint and without consuming an attempt                                                           |
 
 #### Fairness and limits
 
-| Parameter | Value |
-|---|---|
-| Fresh lanes | `LANE_COUNT` = 4 locally, 16 in the design; shard = `hash(endpoint_id) mod N` (changing N needs a drain; documented) |
-| Consumer split | Each worker runs fresh-lane consumers with prefetch 20 and the `retry.ready` consumer with prefetch 5, so retries can't take more than 20% of a worker's concurrency |
-| Per-endpoint concurrency cap | 20 slots (the PRD example), leased with a 30 s expiry so leaked permits recover; over the cap goes to the delay tier |
-| Per-endpoint token bucket | 20 requests/s sustained, burst 40, overridable per endpoint |
-| Quorum queues | `delivery-limit` 5 for poison messages, dead-lettering to the DLQ |
-| HTTP | 3 s connect, 10 s total, 64 KB response cap, 1 KB stored snippet, no redirects |
-| Graceful shutdown | 30 s grace (above the HTTP timeout); Compose `stop_grace_period: 30s` |
+| Parameter                    | Value                                                                                                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh lanes                  | `LANE_COUNT` = 4 locally, 16 in the design; shard = `hash(endpoint_id) mod N` (changing N needs a drain; documented)                                                 |
+| Consumer split               | Each worker runs fresh-lane consumers with prefetch 20 and the `retry.ready` consumer with prefetch 5, so retries can't take more than 20% of a worker's concurrency |
+| Per-endpoint concurrency cap | 20 slots (the PRD example), leased with a 30 s expiry so leaked permits recover; over the cap goes to the delay tier                                                 |
+| Per-endpoint token bucket    | 20 requests/s sustained, burst 40, overridable per endpoint                                                                                                          |
+| Quorum queues                | `delivery-limit` 5 for poison messages, dead-lettering to the DLQ                                                                                                    |
+| HTTP                         | 3 s connect, 10 s total, 64 KB response cap, 1 KB stored snippet, no redirects                                                                                       |
+| Graceful shutdown            | 30 s grace (above the HTTP timeout); Compose `stop_grace_period: 30s`                                                                                                |
 
 #### Security
 
@@ -285,18 +285,18 @@ stateDiagram-v2
 
 ## 7. Technology Stack & Features
 
-| Area | Choice | Why |
-|---|---|---|
-| Language | TypeScript (strict) | Required skill |
-| Backend | Node.js, NestJS (modules, DI, gateways) | Required; DDD-friendly structure |
-| Config and events store | PostgreSQL | Transactions, unique constraints, `SKIP LOCKED` |
-| Attempt log | MongoDB (TTL and compound indexes) | High volume, append-only, flexible, queried per tenant and endpoint |
-| Fast state | Redis | Token bucket, semaphores, breaker state, config cache |
-| Messaging | RabbitMQ (quorum queues, TTL + DLX, publisher confirms, manual acks), via amqplib or a thin wrapper | Required; the built-in NestJS transport hides what the project aims to learn |
-| Frontend | React, TanStack Query (server state), Redux (UI state), Redux-saga (socket channel, bulk replay with cancellation), TanStack Virtual, `useInfiniteQuery` | Required stack; for showcasing split of responsibilities |
-| Realtime | WebSocket (NestJS gateway), RxJS for batching and throttling | Required |
-| Tooling | Docker and Docker Compose, Git, Testcontainers, Nest's default Logger (structured logs), prom-client | Required and quality signals |
-| AI-assisted development | Used throughout and described honestly in the README (what it accelerated, what was reviewed by hand) | Matches the job requirement |
+| Area                    | Choice                                                                                                                                                   | Why                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Language                | TypeScript (strict)                                                                                                                                      | Required skill                                                               |
+| Backend                 | Node.js, NestJS (modules, DI, gateways)                                                                                                                  | Required; DDD-friendly structure                                             |
+| Config and events store | PostgreSQL                                                                                                                                               | Transactions, unique constraints, `SKIP LOCKED`                              |
+| Attempt log             | MongoDB (TTL and compound indexes)                                                                                                                       | High volume, append-only, flexible, queried per tenant and endpoint          |
+| Fast state              | Redis                                                                                                                                                    | Token bucket, semaphores, breaker state, config cache                        |
+| Messaging               | RabbitMQ (quorum queues, TTL + DLX, publisher confirms, manual acks), via amqplib or a thin wrapper                                                      | Required; the built-in NestJS transport hides what the project aims to learn |
+| Frontend                | React, TanStack Query (server state), Redux (UI state), Redux-saga (socket channel, bulk replay with cancellation), TanStack Virtual, `useInfiniteQuery` | Required stack; for showcasing split of responsibilities                     |
+| Realtime                | WebSocket (NestJS gateway), RxJS for batching and throttling                                                                                             | Required                                                                     |
+| Tooling                 | Docker and Docker Compose, Git, Testcontainers, Nest's default Logger (structured logs), prom-client                                                     | Required and quality signals                                                 |
+| AI-assisted development | Used throughout and described honestly in the README (what it accelerated, what was reviewed by hand)                                                    | Matches the job requirement                                                  |
 
 **Third-party integrations:** none required; the mock receiver replaces real customer endpoints.
 
@@ -306,11 +306,11 @@ stateDiagram-v2
 
 Tests assert **external behaviour** (inputs, outputs, messages published, state after a failure), not internal calls. Every test should fail if the bug it targets is present and pass when it's fixed, so each test exists to catch a regression.
 
-| Level | Targets | Notes |
-|---|---|---|
-| **Unit, strict isolation** | RetryPolicy (schedule, jitter bounds, budget), SignatureService (known vectors, rotation, tolerance window, tampered body), SsrfGuard (deny-list table, DNS rebinding with a fake resolver, redirects), DeliveryStateMachine, CursorCodec | Pure or nearly pure; no containers; table-driven |
-| **Integration (Testcontainers)** | IdempotentIngest (concurrent duplicates), OutboxRelay (crash between publish and mark, then no loss), CircuitBreaker and EndpointLimiter (real Redis scripts), retry topology (TTL and DLX actually return the message), worker ack ordering | Real Postgres, Redis, RabbitMQ, Mongo |
-| **End-to-end** | Event accepted, delivered to the mock receiver, attempt visible via the API; failing receiver leads to retries, a breaker opening, recovery and success | One scenario script, reused as the demo |
+| Level                            | Targets                                                                                                                                                                                                                                      | Notes                                            |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **Unit, strict isolation**       | RetryPolicy (schedule, jitter bounds, budget), SignatureService (known vectors, rotation, tolerance window, tampered body), SsrfGuard (deny-list table, DNS rebinding with a fake resolver, redirects), DeliveryStateMachine, CursorCodec    | Pure or nearly pure; no containers; table-driven |
+| **Integration (Testcontainers)** | IdempotentIngest (concurrent duplicates), OutboxRelay (crash between publish and mark, then no loss), CircuitBreaker and EndpointLimiter (real Redis scripts), retry topology (TTL and DLX actually return the message), worker ack ordering | Real Postgres, Redis, RabbitMQ, Mongo            |
+| **End-to-end**                   | Event accepted, delivered to the mock receiver, attempt visible via the API; failing receiver leads to retries, a breaker opening, recovery and success                                                                                      | One scenario script, reused as the demo          |
 
 Regression-catching examples: "same `Idempotency-Key` twice yields one event" fails if the unique constraint is removed; "retry attempt after 20 h carries a fresh timestamp" fails if the timestamp is reused; "killing a worker mid-delivery loses no job" fails if ack happens before the retry publish.
 
@@ -331,6 +331,7 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 **Goal:** accept events safely and publish them to the broker.
 
 **Deliverables**
+
 - ✅ Monorepo, Docker Compose (Postgres, Mongo, Redis, RabbitMQ), versioned migrations
 - ✅ Tenants, API keys, endpoints, subscriptions CRUD with validation
 - ✅ `POST /v1/events` with idempotency, the `events` table, per-tenant rate limit
@@ -344,6 +345,7 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 **Goal:** deliver reliably and survive failure.
 
 **Deliverables**
+
 - ✅ Delivery worker with the SafeHttpClient and signing
 - ✅ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor
 - ✅ Correct ack ordering, quorum queues with delivery limit, graceful shutdown
@@ -356,6 +358,7 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 **Goal:** protect capacity and isolate tenants.
 
 **Deliverables**
+
 - ✅ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier
 - ✅ Sharded fresh lanes, separation of fresh and retry consumption priority
 - ✅ SSRF guard test suite; secret encryption and rotation
@@ -368,6 +371,7 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 **Goal:** make it demoable and defensible.
 
 **Deliverables**
+
 - ✅ React dashboard: endpoints and subscriptions, virtualized infinite delivery log with filters, live updates ("N new" pill), replay and cancellable bulk replay (Redux-saga)
 - ✅ Dashboard gateway with per-tenant bindings and RxJS batching
 - ✅ Prometheus metrics, structured logs with correlation ids
@@ -401,11 +405,10 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 
 ### Risks & Mitigations
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| **Scope creep** into infrastructure (k8s, CI, full observability) in a short time frame | Core flows unfinished or not demoable | Phase gates; k3s, CI and tracing explicitly out of scope; phases 1 to 3 finished before any polish |
-| **Retry topology bugs** (messages looping, lost on dead-letter, wrong tier) | Unreliable core behaviour, hard to debug | Integration tests against a real broker for every transition; a fast time-scale factor; log the attempt number and tier |
-| **Duplicate and lost-message edge cases** hidden in ack ordering | Violated delivery guarantee | Fixed order (retry confirm, then ack); fault-injection run of 10k events; assert counts |
-| **Security mistakes in SSRF handling** (check-then-connect races, redirects, IPv6 forms) | A critical vulnerability story in a security-aware discussion | Check in the connect step with a pinned IP; table-driven deny-list tests; no redirects; network-level egress rule |
-| **Performance claims without numbers** (outbox throughput, Mongo TTL deletion, relay latency) | Architectural decisions that can't be defended | Measure early: `pgbench` for the outbox insert, an ingest load test, `explain()` for log queries; record in the README results table |
-
+| Risk                                                                                          | Impact                                                        | Mitigation                                                                                                                           |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Scope creep** into infrastructure (k8s, CI, full observability) in a short time frame       | Core flows unfinished or not demoable                         | Phase gates; k3s, CI and tracing explicitly out of scope; phases 1 to 3 finished before any polish                                   |
+| **Retry topology bugs** (messages looping, lost on dead-letter, wrong tier)                   | Unreliable core behaviour, hard to debug                      | Integration tests against a real broker for every transition; a fast time-scale factor; log the attempt number and tier              |
+| **Duplicate and lost-message edge cases** hidden in ack ordering                              | Violated delivery guarantee                                   | Fixed order (retry confirm, then ack); fault-injection run of 10k events; assert counts                                              |
+| **Security mistakes in SSRF handling** (check-then-connect races, redirects, IPv6 forms)      | A critical vulnerability story in a security-aware discussion | Check in the connect step with a pinned IP; table-driven deny-list tests; no redirects; network-level egress rule                    |
+| **Performance claims without numbers** (outbox throughput, Mongo TTL deletion, relay latency) | Architectural decisions that can't be defended                | Measure early: `pgbench` for the outbox insert, an ingest load test, `explain()` for log queries; record in the README results table |
