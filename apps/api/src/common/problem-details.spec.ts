@@ -1,5 +1,9 @@
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { IdempotencyConflictError, RateLimitExceededError } from '@wdp/domain';
+import {
+  EndpointNotFoundError,
+  IdempotencyConflictError,
+  RateLimitExceededError,
+} from '@wdp/domain';
 import { describe, expect, it } from 'vitest';
 import { toProblem } from './problem-details.js';
 import { RequestValidationError } from './request-validation.error.js';
@@ -36,6 +40,16 @@ describe('toProblem', () => {
       status: 422,
       code: 'IDEMPOTENCY_KEY_CONFLICT',
       detail: 'key reused',
+    });
+  });
+
+  it('maps a missing resource to 404 with its code', () => {
+    const problem = toProblem(new EndpointNotFoundError('ep-1'));
+
+    expect(problem.status).toBe(404);
+    expect(problem.body).toMatchObject({
+      status: 404,
+      code: 'ENDPOINT_NOT_FOUND',
     });
   });
 

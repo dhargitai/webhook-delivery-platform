@@ -22,6 +22,31 @@ export interface ApiKeysTable {
   >;
 }
 
+export interface EndpointsTable {
+  id: Generated<string>;
+  tenant_id: string;
+  url: string;
+  description: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
+  status: ColumnType<
+    'active' | 'disabled',
+    'active' | 'disabled' | undefined,
+    'active' | 'disabled'
+  >;
+  created_at: Generated<Date>;
+}
+
+export interface SubscriptionsTable {
+  id: Generated<string>;
+  tenant_id: string;
+  endpoint_id: string;
+  event_type: string;
+  created_at: Generated<Date>;
+}
+
 export interface EventsTable {
   event_id: string;
   tenant_id: string;
@@ -43,5 +68,7 @@ export interface EventsTable {
 export interface Database {
   tenants: TenantsTable;
   api_keys: ApiKeysTable;
+  endpoints: EndpointsTable;
+  subscriptions: SubscriptionsTable;
   events: EventsTable;
 }

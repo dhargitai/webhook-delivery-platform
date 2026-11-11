@@ -1,6 +1,10 @@
 import { STATUS_CODES } from 'node:http';
 import { HttpException } from '@nestjs/common';
-import { IdempotencyConflictError, RateLimitExceededError } from '@wdp/domain';
+import {
+  IdempotencyConflictError,
+  NotFoundError,
+  RateLimitExceededError,
+} from '@wdp/domain';
 import {
   RequestValidationError,
   type ValidationIssue,
@@ -71,6 +75,9 @@ export function toProblem(exception: unknown): Problem {
       detail: exception.message,
       code: exception.code,
     });
+  }
+  if (exception instanceof NotFoundError) {
+    return problem(404, { detail: exception.message, code: exception.code });
   }
   if (exception instanceof RateLimitExceededError) {
     return problem(

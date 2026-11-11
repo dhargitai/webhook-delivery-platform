@@ -84,14 +84,16 @@ describe('IngestRateLimiter (real Redis)', () => {
   });
 
   it('never refills above the burst', async () => {
+    // A slow rate: the four calls below may take a while on a busy machine,
+    // and at 10 tokens/s even 100 ms of delay refills less than one token.
     const limiter = new IngestRateLimiter(redis, {
-      ratePerSecond: 100,
+      ratePerSecond: 10,
       burst: 3,
     });
     const id = tenant();
 
     await limiter.tryAcquire(id);
-    await sleep(200); // would refill 20 tokens if uncapped
+    await sleep(500); // would refill 5 tokens if uncapped
 
     const results = [];
     for (let i = 0; i < 4; i++) {

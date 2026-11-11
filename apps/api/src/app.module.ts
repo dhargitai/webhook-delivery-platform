@@ -8,6 +8,7 @@ import { databaseConfig } from './config/database.config.js';
 import { envSchema } from './config/env.schema.js';
 import { ingestConfig } from './config/ingest.config.js';
 import { redisConfig } from './config/redis.config.js';
+import { EndpointsModule } from './endpoints/endpoints.module.js';
 import { EventsModule } from './events/events.module.js';
 import { InfrastructureModule } from './infrastructure/infrastructure.module.js';
 
@@ -21,6 +22,7 @@ import { InfrastructureModule } from './infrastructure/infrastructure.module.js'
     }),
     InfrastructureModule,
     AuthModule,
+    EndpointsModule,
     EventsModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: ProblemDetailsFilter }],

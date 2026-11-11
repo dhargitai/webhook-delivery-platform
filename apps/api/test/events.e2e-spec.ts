@@ -1,63 +1,25 @@
-import type { NestExpressApplication } from '@nestjs/platform-express';
-import { Test } from '@nestjs/testing';
-import { createDatabase, generateApiKey, type Database } from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
-import type { Kysely } from 'kysely';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { generateApiKey } from '@wdp/core';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { startTestApp, type TestApp } from './support/test-app.js';
 
 const PROBLEM_JSON = /^application\/problem\+json/;
 
 describe('POST /v1/events (e2e)', () => {
-  let testDb: TestDatabase;
-  let app: NestExpressApplication;
-  let db: Kysely<Database>;
+  let t: TestApp;
 
   beforeAll(async () => {
-    testDb = await createTestDatabase(inject('postgresAdminUrl'));
-    // The config module validates the environment while app.module.ts is
-    // evaluated, so the variables must exist before that import.
-    process.env.DATABASE_URL = testDb.url;
-    process.env.REDIS_URL = inject('redisUrl');
-    process.env.INGEST_RATE_PER_SECOND = '1';
-    process.env.INGEST_BURST = '5';
-
-    const { AppModule } = await import('../src/app.module.js');
-    const { configureApp } = await import('../src/configure-app.js');
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-    app = moduleRef.createNestApplication<NestExpressApplication>();
-    configureApp(app);
-    await app.init();
-
-    db = createDatabase(testDb.url);
+    // A small bucket so the rate limit tests need only a few requests.
+    t = await startTestApp({ INGEST_RATE_PER_SECOND: '1', INGEST_BURST: '5' });
   });
 
   afterAll(async () => {
-    await app.close();
-    await db.destroy();
-    await testDb.drop();
+    await t.close();
   });
 
-  /** A fresh tenant with its own API key, so rate limit buckets never overlap. */
-  async function seedTenant() {
-    const tenant = await db
-      .insertInto('tenants')
-      .values({ name: `tenant-${Math.random()}` })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    const { key, prefix, hash } = generateApiKey();
-    await db
-      .insertInto('api_keys')
-      .values({ tenant_id: tenant.id, prefix, key_hash: hash })
-      .execute();
-    return { tenantId: tenant.id, key };
-  }
-
+  const seedTenant = () => t.seedTenant();
   const post = (key: string | null, body: unknown, idempotencyKey?: string) => {
-    const req = request(app.getHttpServer()).post('/v1/events');
+    const req = request(t.app.getHttpServer()).post('/v1/events');
     if (key !== null) req.set('Authorization', `Bearer ${key}`);
     if (idempotencyKey !== undefined)
       req.set('Idempotency-Key', idempotencyKey);
@@ -84,7 +46,7 @@ describe('POST /v1/events (e2e)', () => {
     it('rejects a revoked API key', async () => {
       const { tenantId } = await seedTenant();
       const { key, prefix, hash } = generateApiKey();
-      await db
+      await t.db
         .insertInto('api_keys')
         .values({
           tenant_id: tenantId,
@@ -108,7 +70,7 @@ describe('POST /v1/events (e2e)', () => {
 
       expect(res.status).toBe(202);
       expect(res.body.event_id).toMatch(/^[0-9a-f-]{36}$/);
-      const row = await db
+      const row = await t.db
         .selectFrom('events')
         .selectAll()
         .where('event_id', '=', res.body.event_id)
@@ -131,7 +93,7 @@ describe('POST /v1/events (e2e)', () => {
       expect(first.status).toBe(202);
       expect(second.status).toBe(202);
       expect(second.body.event_id).toBe(first.body.event_id);
-      const rows = await db
+      const rows = await t.db
         .selectFrom('events')
         .select('event_id')
         .where('tenant_id', '=', tenantId)
@@ -190,7 +152,7 @@ describe('POST /v1/events (e2e)', () => {
     it('answers 400 for malformed JSON', async () => {
       const { key } = await seedTenant();
 
-      const res = await request(app.getHttpServer())
+      const res = await request(t.app.getHttpServer())
         .post('/v1/events')
         .set('Authorization', `Bearer ${key}`)
         .set('Content-Type', 'application/json')
@@ -215,7 +177,7 @@ describe('POST /v1/events (e2e)', () => {
     it('answers unknown routes with problem+json', async () => {
       const { key } = await seedTenant();
 
-      const res = await request(app.getHttpServer())
+      const res = await request(t.app.getHttpServer())
         .get('/v1/nope')
         .set('Authorization', `Bearer ${key}`);
 
@@ -246,7 +208,7 @@ describe('POST /v1/events (e2e)', () => {
 
       await post(key, invoice);
 
-      const rows = await db
+      const rows = await t.db
         .selectFrom('events')
         .select('event_id')
         .where('tenant_id', '=', tenantId)
