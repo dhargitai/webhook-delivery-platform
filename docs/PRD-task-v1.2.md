@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.1
+**Version:** 1.2
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -108,7 +108,7 @@ Poll unpublished rows in batches with `SKIP LOCKED`, publish with confirms, then
 **Blocked by:** Tasks 4, 5
 
 **What to build:**
-Fan each event out into one delivery job per subscribed endpoint, sharded onto fresh lane queues by endpoint. Subscribers are read from Postgres on every event; the PRD's Redis subscription cache is not built and has no task (a scale-up path). A failed dispatch dead-letters the whole event, even on a transient broker error; Task 47 fixes this.
+Fan each event out into one delivery job per subscribed endpoint, sharded onto fresh lane queues by endpoint. Subscribers are read from Postgres on every event; the PRD's Redis subscription cache is not built and has no task (a scale-up path). A failed dispatch is retried through a retry queue and dead-lettered only once its attempts run out (Task 47).
 
 **Acceptance Criteria:**
 - [x] One job per subscribed endpoint on the right lane
@@ -129,7 +129,7 @@ A customer endpoint stand-in with configurable failure rate, status, latency and
 
 ### Phase 2: Delivery, retries and DLQ
 
-### Task 47: Fix: transient dispatch failures are retried, not dead-lettered ⬜
+### Task 47: Fix: transient dispatch failures are retried, not dead-lettered ✅
 **Original Story:** 16 (at-least-once delivery of every accepted event)
 **Scope:** `dispatcher`, `core`, `messaging`
 **Blocked by:** None (do it first in Phase 2, on a `fix/` branch)
@@ -140,13 +140,13 @@ Today any dispatch failure, including one job whose publish confirm timed out, r
 Broker behaviour, measured on RabbitMQ 4.4.0 with this project's queue arguments (delivery limit 5): `nack` with requeue never counts toward the delivery limit (30 of 30 deliveries, nothing dead-lettered), while `reject` with requeue does (6 deliveries, then the DLQ). Both redeliver at once, with no pause. So neither requeue alone gives the pause, and `nack` gives no bound either. Before 4.3 every return counted toward the limit, and Compose and the tests use the floating `rabbitmq:4` tag, so the image must be pinned to 4.4 for this behaviour to hold.
 
 **Acceptance Criteria:**
-- [ ] An event whose first dispatch hits a transient publish failure is dispatched to every subscribed endpoint without manual action
-- [ ] Re-handling after a partial failure republishes the already sent jobs with the same `delivery_id`s and adds no extra endpoints' jobs
-- [ ] Retries pause between attempts and do not spin the consumer
-- [ ] A malformed event message is still dead-lettered at once
-- [ ] A failure that persists past the bound ends in the DLQ with its reason
-- [ ] Compose and the integration tests run the same pinned RabbitMQ version
-- [ ] The integration test fails against the current code (event dead-lettered on the first transient failure)
+- [x] An event whose first dispatch hits a transient publish failure is dispatched to every subscribed endpoint without manual action
+- [x] Re-handling after a partial failure republishes the already sent jobs with the same `delivery_id`s and adds no extra endpoints' jobs
+- [x] Retries pause between attempts and do not spin the consumer
+- [x] A malformed event message is still dead-lettered at once
+- [x] A failure that persists past the bound ends in the DLQ with its reason
+- [x] Compose and the integration tests run the same pinned RabbitMQ version
+- [x] The integration test fails against the current code (event dead-lettered on the first transient failure)
 
 ### Task 0: Greenfield service setup (worker) ⬜
 **Original Story:** Infrastructure
