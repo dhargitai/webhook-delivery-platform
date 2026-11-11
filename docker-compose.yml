@@ -128,16 +128,26 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # The delivery worker. Only its status endpoint exists so far; it needs no
-  # dependency until it consumes the lanes (Task 14).
+  # The delivery worker: consumes the lane queues, signs each job and POSTs it
+  # to the endpoint. It also answers GET /status.
   worker:
     <<: *app
     command: ['node', 'apps/worker/dist/main.js']
     environment:
       <<: *env
       PORT: '3001'
+      # Development only: lets the worker's SSRF guard reach the plain-http
+      # mock receiver, a private address. Keep it the same as the API's.
+      SSRF_ALLOW_HOSTS: mock-receiver
     ports:
       - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -148,7 +158,7 @@ services:
       timeout: 5s
       retries: 20
 
-  # A stand-in for a customer's endpoint. Nothing calls it before Phase 2.
+  # A stand-in for a customer's endpoint. The worker calls it.
   mock-receiver:
     <<: *app
     command: ['node', 'apps/mock-receiver/dist/main.js']
