@@ -9,6 +9,19 @@ export interface TenantsTable {
   created_at: Generated<Date>;
 }
 
+export interface ApiKeysTable {
+  id: Generated<string>;
+  tenant_id: string;
+  prefix: string;
+  key_hash: string;
+  created_at: Generated<Date>;
+  revoked_at: ColumnType<
+    Date | null,
+    Date | string | null | undefined,
+    Date | string | null
+  >;
+}
+
 export interface EventsTable {
   event_id: string;
   tenant_id: string;
@@ -29,5 +42,6 @@ export interface EventsTable {
 /** Only the tables the code reads or writes so far; more arrive with their features. */
 export interface Database {
   tenants: TenantsTable;
+  api_keys: ApiKeysTable;
   events: EventsTable;
 }
