@@ -4,7 +4,7 @@ A multi-tenant platform that accepts events through a public REST API and reliab
 
 This is a **learning and portfolio project**. It is designed for a realistic production load (1,000 tenants, 5k events/s peak, fan-out 3, about 15k deliveries/s, first attempt within 5 s at p99), but built and demoed as a thin vertical slice at hundreds of events per second. Every simplification is deliberate and has a documented scale-up path.
 
-> **Status: Phase 1 is complete, Phase 2 has started.** `docker compose up` runs the whole Phase 1 stack: events are accepted through `POST /v1/events` (API key auth, idempotency, per-tenant rate limit), stored atomically in a Postgres outbox, moved onto RabbitMQ by the relay, and fanned out by the dispatcher into one delivery job per subscribed endpoint on the lane queues, with endpoint and subscription management around it. A dispatch that fails (a broker or database error) is retried after a pause through a retry queue, and only dead-lettered, with its reason, once its attempts run out. **Nothing delivers those jobs yet:** the signature service, the retry policy and the retry queue declarations are built as modules, but the delivery worker that uses them, and the attempt log, are still to come, and everything after Phase 2 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
+> **Status: Phase 1 is complete, Phase 2 has started.** `docker compose up` runs the whole Phase 1 stack: events are accepted through `POST /v1/events` (API key auth, idempotency, per-tenant rate limit), stored atomically in a Postgres outbox, moved onto RabbitMQ by the relay, and fanned out by the dispatcher into one delivery job per subscribed endpoint on the lane queues, with endpoint and subscription management around it. A dispatch that fails (a broker or database error) is retried after a pause through a retry queue, and only dead-lettered, with its reason, once its attempts run out. **Nothing delivers those jobs yet:** the signature service, the retry policy, the safe HTTP client and the retry queue declarations are built as modules, but the delivery worker that uses them, and the attempt log, are still to come, and everything after Phase 2 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
 
 ## Contents
 
@@ -107,12 +107,12 @@ Dockerfile            one image for every service, Node 24 runtime
 docker-compose.yml    the full stack
 docs/
   PRD-v1.0.md       product requirements and locked design parameters
-  PRD-task-v1.5.md  implementation task breakdown, with status per task
+  PRD-task-v1.6.md  implementation task breakdown, with status per task
 tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
 
-`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, the signature service, and the retry policy). `@wdp/messaging` holds the RabbitMQ layer (topology including the retry tier and delay queues, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (worker, gateway, dashboard) are added as the phases land.
+`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, the signature service, the retry policy, and the safe HTTP client). `@wdp/messaging` holds the RabbitMQ layer (topology including the retry tier and delay queues, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (worker, gateway, dashboard) are added as the phases land.
 
 ### How workspace libraries resolve
 
@@ -282,7 +282,7 @@ The three demo scenes: (1) kill the receiver and watch retries, the breaker open
 ## Documentation
 
 - [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md): the product requirements document, covering scope, user stories, deep modules, implementation decisions and locked parameters, testing strategy, phases and risks.
-- [`docs/PRD-task-v1.5.md`](docs/PRD-task-v1.5.md): the implementation task breakdown, with the status of every task.
+- [`docs/PRD-task-v1.6.md`](docs/PRD-task-v1.6.md): the implementation task breakdown, with the status of every task.
 
 ## License
 

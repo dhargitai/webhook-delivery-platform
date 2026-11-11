@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.5
+**Version:** 1.6
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -196,17 +196,17 @@ Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and 
 - [x] A tampered body or an old timestamp fails verification
 - [x] A header with several signatures verifies against any matching secret
 
-### Task 11: SafeHttpClient limits ⬜
+### Task 11: SafeHttpClient limits ✅
 **Original Story:** 25 (part)
 **Scope:** `core`
 **Blocked by:** None
 
 **What to build:**
-`post(url, headers, body, limits) -> Result` with a 3 s connect and 10 s total timeout, no redirects and a 64 KB response cap, classifying outcomes.
+`post(url, headers, body) -> Result` with a 3 s connect and 10 s total timeout, no redirects and a 64 KB response cap, classifying outcomes. The limits are constructor options (`connectTimeoutMs`, `totalTimeoutMs`, `maxResponseBytes`), not a `limits` argument. A failed result has a `kind`: `http_error`, `redirect`, `response_too_large` (also for a 2xx), `connect_timeout`, `timeout`, `network_error` or `invalid_url`; `post` never throws. An optional `lookup` option is the connect-time DNS hook Task 12 plugs into.
 
 **Acceptance Criteria:**
-- [ ] Timeouts, redirects and oversized responses each produce a distinct failed result
-- [ ] Only 2xx is a success
+- [x] Timeouts, redirects and oversized responses each produce a distinct failed result
+- [x] Only 2xx is a success
 
 ### Task 12: Connect-time SSRF guard ⬜
 **Original Story:** 25
@@ -214,7 +214,7 @@ Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and 
 **Blocked by:** Task 11
 
 **What to build:**
-Resolve DNS, check the deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), and pin the IP with correct SNI and Host. A dev-only `SSRF_ALLOW_HOSTS` allowlist stays off in the suite.
+Resolve DNS, check the deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), and pin the IP with correct SNI and Host. A dev-only `SSRF_ALLOW_HOSTS` allowlist stays off in the suite. The guard plugs into `SafeHttpClient` through its `lookup` option; Task 11's tests cover only plain http, so the https path (SNI, `secureConnect`) is tested here.
 
 **Acceptance Criteria:**
 - [ ] The suite blocks every deny-list category
