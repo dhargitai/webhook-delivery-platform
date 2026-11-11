@@ -1,8 +1,8 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.10
-**Source PRD:** PRD-v1.1
+**Version:** 1.11
+**Source PRD:** PRD-v1.2
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -28,7 +28,6 @@ Tenants publish events through a public REST API, and the platform delivers ever
 - Docker with Compose, for the stack and for Testcontainers.
 - `SECRETS_KEK_V1`: a base64 32-byte key, needed from Task 22.
 - `TIME_SCALE` (default 1, demo 30, tests 1000), needed from Task 16.
-- `SSRF_ALLOW_HOSTS` must also reach the worker (Compose sets it only on `api` today), from Task 14.
 - A JWT signing secret shared by `api` and `gateway`, from Task 38. The PRD does not name it; add it to `.env.example`.
 - A MongoDB container in the integration test setup (it starts only Postgres, Redis and RabbitMQ today), from Task 15.
 - Locked PRD parameters (section 6) must not change without asking.
@@ -198,7 +197,7 @@ A daily batched purge of published `events` rows older than 30 days.
 **Blocked by:** Task 4
 
 **What to build:**
-Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and shows it once. The secret is stored in plaintext until Task 22 lands; Task 22 is blocked only by this task, so it can follow straight after. Built as `generateEndpointSecret` in `@wdp/core`, stored in `endpoints.signing_secret` (migration 0004 backfills existing endpoints, so none is without a secret), and returned as `secret` by `POST /v1/endpoints` only. Nothing reads it back yet: the worker's read path belongs to Task 14, rotation to Task 29.
+Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and shows it once. The secret is stored in plaintext until Task 22 lands; Task 22 is blocked only by this task, so it can follow straight after. Built as `generateEndpointSecret` in `@wdp/core`, stored in `endpoints.signing_secret` (migration 0004 backfills existing endpoints, so none is without a secret), and returned as `secret` by `POST /v1/endpoints` only. The worker reads it through `EndpointTargetLookup` (Task 14); rotation belongs to Task 29.
 
 **Acceptance Criteria:**
 
@@ -262,21 +261,21 @@ Registration resolves the host and rejects disallowed targets with a reason.
 
 - [ ] Registering `https://169.254.169.254/` returns `422 url_not_allowed` naming the reason
 
-### Task 14: First delivery end to end ⬜
+### Task 14: First delivery end to end ✅
 
 **Original Story:** 1, 8
 **Scope:** `worker`, `core`, `messaging`
 **Blocked by:** Tasks 0, 6, 9, 10, 12
 
 **What to build:**
-The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through the SafeHttpClient and the SSRF guard (one `SsrfGuard` supplies the client's `lookup` and `hostCheck`, with `SSRF_ALLOW_HOSTS` read by the worker), and acks. `webhook-id` is stable and `webhook-timestamp` is regenerated on every attempt.
+The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through the SafeHttpClient and the SSRF guard (one `SsrfGuard` supplies the client's `lookup` and `hostCheck`, with `SSRF_ALLOW_HOSTS` read by the worker), and acks. `webhook-id` is stable and `webhook-timestamp` is regenerated on every attempt. Built as `DeliveryAttempt` and `EndpointTargetLookup` (the worker's read path to an endpoint's url, secret and status, scoped by tenant) in `@wdp/core`, and `JobMessageHandler` and `WorkerRunner` in `apps/worker`. The `webhook-id` is the `delivery_id`; the body is the envelope `{id: event_id, type, data: payload}`, serialised once, so the signed bytes are the sent bytes. The worker consumes every lane, one channel per lane, with `WORKER_PREFETCH` (20) each. A failed attempt (any non-2xx, timeout or SSRF block) and a job for a missing or disabled endpoint are logged and acked, not retried: Task 18 replaces that branch. A malformed job, or an unexpected error such as a failed endpoint lookup, is dead-lettered by the consumer. Compose gives the worker `SSRF_ALLOW_HOSTS` and the same `depends_on` as the dispatcher.
 
 **Acceptance Criteria:**
 
-- [ ] An accepted event reaches the mock receiver with a valid signature
-- [ ] Every outbound request goes through the SSRF guard; the mock receiver is reachable only through the worker's `SSRF_ALLOW_HOSTS`
-- [ ] The job is acked only after the attempt is handled
-- [ ] A later attempt carries the same `webhook-id` and a fresh timestamp
+- [x] An accepted event reaches the mock receiver with a valid signature
+- [x] Every outbound request goes through the SSRF guard; the mock receiver is reachable only through the worker's `SSRF_ALLOW_HOSTS`
+- [x] The job is acked only after the attempt is handled
+- [x] A later attempt carries the same `webhook-id` and a fresh timestamp
 
 ### Task 15: Attempt log in Mongo ⬜
 
@@ -329,7 +328,7 @@ A pure `next(attempt, rng) -> {action, delay, tier, bucket}` (no `now`: nothing 
 **Blocked by:** Tasks 14, 15, 16, 17
 
 **What to build:**
-On a failed attempt: log it, publish to the retry tier, wait for the confirm, then ack. The PRD's DeliveryStateMachine (`Delivery.recordAttempt`, states pending, in-flight, succeeded, retrying, dead, and the attempt budget) lands here in `@wdp/domain`, and the job carries its attempt number.
+On a failed attempt: log it, publish to the retry tier, wait for the confirm, then ack. This replaces Task 14's branch, which only logs a failed attempt and acks it. The PRD's DeliveryStateMachine (`Delivery.recordAttempt`, states pending, in-flight, succeeded, retrying, dead, and the attempt budget) lands here in `@wdp/domain`, and the job carries its attempt number.
 
 **Acceptance Criteria:**
 

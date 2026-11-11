@@ -77,5 +77,15 @@ export {
   Dispatcher,
   PartialDispatchError,
 } from './dispatch/dispatcher.js';
+export {
+  type AttemptOutcome,
+  DeliveryAttempt,
+  type DeliveryAttemptDeps,
+} from './delivery/delivery-attempt.js';
+export {
+  type EndpointTarget,
+  EndpointTargetLookup,
+} from './delivery/endpoint-target-lookup.js';
+export { KyselyEndpointTargetLookup } from './delivery/kysely-endpoint-target-lookup.js';
 export { KyselySubscriptionLookup } from './dispatch/kysely-subscription-lookup.js';
 export { SubscriptionLookup } from './dispatch/subscription-lookup.js';
