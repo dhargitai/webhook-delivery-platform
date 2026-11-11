@@ -9,8 +9,12 @@ describe('POST /v1/events (e2e)', () => {
   let t: TestApp;
 
   beforeAll(async () => {
-    // A small bucket so the rate limit tests need only a few requests.
-    t = await startTestApp({ INGEST_RATE_PER_SECOND: '1', INGEST_BURST: '5' });
+    // A small bucket so the rate limit tests need only a few requests, with a
+    // refill so slow (one token per 100 s) that none returns mid-test.
+    t = await startTestApp({
+      INGEST_RATE_PER_SECOND: '0.01',
+      INGEST_BURST: '5',
+    });
   });
 
   afterAll(async () => {

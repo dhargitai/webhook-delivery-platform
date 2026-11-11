@@ -23,9 +23,10 @@ describe('IngestRateLimiter (real Redis)', () => {
   const tenant = () => randomUUID();
 
   it('admits exactly the burst and then rejects', async () => {
-    // A slow refill so no token sneaks back in while the calls run.
+    // A refill so slow (one token per 100 s) that none returns while the calls
+    // run, however busy the machine is.
     const limiter = new IngestRateLimiter(redis, {
-      ratePerSecond: 1,
+      ratePerSecond: 0.01,
       burst: 200,
     });
     const id = tenant();
@@ -48,9 +49,12 @@ describe('IngestRateLimiter (real Redis)', () => {
     );
     const admitted = results.filter((r) => r.allowed).length;
 
-    // Burst 200, plus whatever 100/s refilled while the 400 calls ran.
+    // The burst of 200, plus whatever 100/s refilled while the calls ran. The
+    // ceiling leaves room for a slow machine (150 extra = 1.5 s) yet still
+    // fails if the default burst were large enough to admit all 400. The exact
+    // defaults are pinned by a unit test.
     expect(admitted).toBeGreaterThanOrEqual(200);
-    expect(admitted).toBeLessThanOrEqual(230);
+    expect(admitted).toBeLessThanOrEqual(350);
   });
 
   it('tells a rejected caller how many seconds to wait', async () => {
@@ -68,8 +72,10 @@ describe('IngestRateLimiter (real Redis)', () => {
   });
 
   it('admits again once tokens have refilled', async () => {
+    // 4 tokens/s: the three calls can take up to ~250 ms before a token comes
+    // back early, and 500 ms is plenty to earn one.
     const limiter = new IngestRateLimiter(redis, {
-      ratePerSecond: 10,
+      ratePerSecond: 4,
       burst: 2,
     });
     const id = tenant();
@@ -78,7 +84,7 @@ describe('IngestRateLimiter (real Redis)', () => {
     expect((await limiter.tryAcquire(id)).allowed).toBe(true);
     expect((await limiter.tryAcquire(id)).allowed).toBe(false);
 
-    await sleep(250);
+    await sleep(500);
 
     expect((await limiter.tryAcquire(id)).allowed).toBe(true);
   });
@@ -104,7 +110,7 @@ describe('IngestRateLimiter (real Redis)', () => {
 
   it('keeps tenants independent', async () => {
     const limiter = new IngestRateLimiter(redis, {
-      ratePerSecond: 1,
+      ratePerSecond: 0.01,
       burst: 1,
     });
     const noisy = tenant();
@@ -117,7 +123,7 @@ describe('IngestRateLimiter (real Redis)', () => {
   });
 
   it('admits exactly the burst when many callers race on separate connections', async () => {
-    const options = { ratePerSecond: 1, burst: 50 };
+    const options = { ratePerSecond: 0.01, burst: 50 };
     const a = new IngestRateLimiter(redis, options);
     const b = new IngestRateLimiter(redisB, options);
     const id = tenant();

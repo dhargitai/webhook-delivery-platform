@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { laneRoutingKey } from '@wdp/domain';
 
 /**
  * Maps an endpoint to one of the fresh-delivery lanes, so all traffic for an
@@ -23,6 +24,6 @@ export class LaneRouter {
       .digest()
       .readUInt32BE(0);
     const lane = bucket % this.laneCount;
-    return `fresh.shard.${String(lane).padStart(2, '0')}`;
+    return laneRoutingKey(lane);
   }
 }

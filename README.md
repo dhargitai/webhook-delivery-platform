@@ -4,7 +4,7 @@ A multi-tenant platform that accepts events through a public REST API and reliab
 
 This is a **learning and portfolio project**. It is designed for a realistic production load (1,000 tenants, 5k events/s peak, fan-out 3, about 15k deliveries/s, first attempt within 5 s at p99), but built and demoed as a thin vertical slice at hundreds of events per second. Every simplification is deliberate and has a documented scale-up path.
 
-> **Status: Phase 1 in progress.** Built so far: idempotent event ingestion (`POST /v1/events`, API key auth, per-tenant rate limit), endpoint and subscription management, the Postgres schema and migrations, and the pure modules behind them. Still to come in Phase 1: the RabbitMQ topology, the outbox relay, the dispatcher, the mock receiver and Docker Compose. Everything after Phase 1 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
+> **Status: Phase 1 in progress.** Built so far: idempotent event ingestion (`POST /v1/events`, API key auth, per-tenant rate limit), endpoint and subscription management, the Postgres schema and migrations, and the pure modules behind them. The RabbitMQ layer is built too (topology, confirmed publishing, consumers). Still to come in Phase 1: the outbox relay, the dispatcher, the mock receiver and Docker Compose. Everything after Phase 1 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
 
 ## Contents
 
@@ -103,7 +103,7 @@ tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
 
-`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store and the migration runner). `@wdp/messaging` and `@wdp/observability` are still empty. `migrations/` holds the SQL schema. The remaining apps (relay, dispatcher, worker, gateway, mock receiver, dashboard) are added as the phases land.
+`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store and the migration runner). `@wdp/messaging` holds the RabbitMQ layer (topology, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (relay, dispatcher, worker, gateway, mock receiver, dashboard) are added as the phases land.
 
 ### How workspace libraries resolve
 
@@ -118,7 +118,7 @@ tsconfig.json       root typecheck over apps/ and libs/
 
 - [Bun](https://bun.sh) (package manager and workspace tool)
 - Node.js 24 (runtime)
-- Docker, for the integration and end-to-end tests (they start Postgres and Redis through Testcontainers). Docker Compose for the full stack lands later in Phase 1 (planned)
+- Docker, for the integration and end-to-end tests (they start Postgres, Redis and RabbitMQ through Testcontainers). Docker Compose for the full stack lands later in Phase 1 (planned)
 
 ### Install and run
 
@@ -152,7 +152,7 @@ Run from the repository root.
 | `bun run test` | Runs unit tests (`*.spec.ts`) |
 | `bun run test:watch` | Runs unit tests in watch mode |
 | `bun run test:cov` | Runs unit tests with coverage |
-| `bun run test:integration` | Runs integration tests (`*.int-spec.ts`) against real Postgres and Redis. Needs Docker |
+| `bun run test:integration` | Runs integration tests (`*.int-spec.ts`) against real Postgres, Redis and RabbitMQ. Needs Docker |
 | `bun run test:e2e` | Runs end-to-end tests (`*.e2e-spec.ts`) against the real app. Needs Docker |
 
 Per-app scripts (`start`, `start:dev`, `start:debug`, `start:prod`) live in each app's `package.json` and run with `bun run --filter @wdp/api <script>`.
@@ -164,7 +164,7 @@ Tests assert external behaviour, and each one exists to catch a regression: it m
 | Level | Targets |
 |---|---|
 | Unit | Retry policy, signature service, SSRF guard, delivery state machine, cursor codec. Pure or nearly pure, table-driven, no containers. |
-| Integration (Testcontainers) | Built: idempotent ingest under concurrent duplicates, the schema's constraints, endpoint and subscription queries, the rate limiter's Lua script against real Redis. Planned: outbox relay crash recovery, circuit breaker, the retry topology against a real broker, worker ack ordering. Postgres and Redis start once per run; each spec gets its own migrated database or unique keys. |
+| Integration (Testcontainers) | Built: idempotent ingest under concurrent duplicates, the schema's constraints, endpoint and subscription queries, the rate limiter's Lua script against real Redis, the broker topology, confirmed publishing and consumer ack ordering against real RabbitMQ (redelivery after a crash, the delivery limit, graceful stop). Planned: outbox relay crash recovery, circuit breaker, the retry tier queues, worker ack ordering. Postgres, Redis and RabbitMQ start once per run; each spec gets its own migrated database, unique keys, or its own exchange and queue namespace. |
 | End-to-end | Built: the HTTP API against the real app (auth, ingest, idempotency, rate limiting, endpoints and subscriptions, tenant isolation). Planned: | Event accepted, delivered to the mock receiver, attempt visible through the API. A failing receiver leads to retries, the breaker opening, recovery and success. The same script is the demo. |
 
 ## Configuration

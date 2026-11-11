@@ -7,6 +7,7 @@ export { type ApiKeysTable } from './db/schema.js';
 export { KyselyEventStore } from './db/kysely-event-store.js';
 export { migrate, MIGRATIONS_DIR } from './db/migrate.js';
 export {
+  DEFAULT_INGEST_RATE_LIMIT,
   IngestRateLimiter,
   type IngestRateLimitOptions,
   type RateLimitResult,

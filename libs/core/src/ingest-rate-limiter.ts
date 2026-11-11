@@ -11,7 +11,7 @@ export type RateLimitResult =
   { allowed: true } | { allowed: false; retryAfterSeconds: number };
 
 // PRD locked parameters: 100 events/s sustained, burst 200 per tenant.
-const DEFAULT_OPTIONS: IngestRateLimitOptions = {
+export const DEFAULT_INGEST_RATE_LIMIT: IngestRateLimitOptions = {
   ratePerSecond: 100,
   burst: 200,
 };
@@ -80,7 +80,7 @@ export class IngestRateLimiter {
     private readonly redis: Redis,
     options: Partial<IngestRateLimitOptions> = {},
   ) {
-    this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.options = { ...DEFAULT_INGEST_RATE_LIMIT, ...options };
     // Registers the script once per client; ioredis then calls it with EVALSHA.
     // Defining it twice with identical source is harmless.
     this.redis.defineCommand('tokenBucket', {
