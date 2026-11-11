@@ -7,12 +7,20 @@ import {
   type NewEndpoint,
 } from './endpoints.repository.js';
 
+/** A new endpoint with its signing secret, which exists in the clear only here. */
+export interface CreatedEndpoint {
+  endpoint: Endpoint;
+  secret: string;
+}
+
 @Injectable()
 export class EndpointsService {
   constructor(private readonly endpoints: EndpointsRepository) {}
 
-  create(tenantId: string, input: NewEndpoint): Promise<Endpoint> {
-    return this.endpoints.create(tenantId, input, generateEndpointSecret());
+  async create(tenantId: string, input: NewEndpoint): Promise<CreatedEndpoint> {
+    const secret = generateEndpointSecret();
+    const endpoint = await this.endpoints.create(tenantId, input, secret);
+    return { endpoint, secret };
   }
 
   list(tenantId: string): Promise<Endpoint[]> {

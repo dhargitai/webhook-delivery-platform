@@ -88,6 +88,57 @@ describe('endpoints and subscriptions (e2e)', () => {
     expect((await call('get', '/endpoints', key)).body.data).toEqual([]);
   });
 
+  describe('signing secret', () => {
+    const SECRET_PATTERN = /^whsec_[A-Za-z0-9+/]{43}=$/;
+
+    it('returns the secret once, when the endpoint is created', async () => {
+      const { key } = await t.seedTenant();
+
+      const created = await call('post', '/endpoints', key, {
+        url: 'https://hooks.acme.test/in',
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body.secret).toMatch(SECRET_PATTERN);
+      const stored = await t.db
+        .selectFrom('endpoints')
+        .select('signing_secret')
+        .where('id', '=', created.body.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.signing_secret).toBe(created.body.secret);
+    });
+
+    it('never returns the secret on a later read', async () => {
+      const { key } = await t.seedTenant();
+      const created = await call('post', '/endpoints', key, {
+        url: 'https://hooks.acme.test/in',
+      });
+      const secret = created.body.secret as string;
+
+      const one = await call('get', `/endpoints/${created.body.id}`, key);
+      const all = await call('get', '/endpoints', key);
+
+      expect(one.status).toBe(200);
+      expect(all.status).toBe(200);
+      expect(JSON.stringify(one.body)).not.toContain(secret);
+      expect(JSON.stringify(all.body)).not.toContain(secret);
+      expect(one.body).not.toHaveProperty('secret');
+    });
+
+    it('gives each endpoint its own secret', async () => {
+      const { key } = await t.seedTenant();
+
+      const first = await call('post', '/endpoints', key, {
+        url: 'https://hooks.acme.test/in',
+      });
+      const second = await call('post', '/endpoints', key, {
+        url: 'https://hooks.acme.test/in',
+      });
+
+      expect(first.body.secret).not.toBe(second.body.secret);
+    });
+  });
+
   it('replaces rather than extends the subscription set', async () => {
     const { key } = await t.seedTenant();
     const { id } = await createEndpoint(key);
