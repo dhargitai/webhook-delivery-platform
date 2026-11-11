@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.7
+**Version:** 1.8
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -148,16 +148,16 @@ Broker behaviour, measured on RabbitMQ 4.4.0 with this project's queue arguments
 - [x] Compose and the integration tests run the same pinned RabbitMQ version
 - [x] The integration test fails against the current code (event dead-lettered on the first transient failure)
 
-### Task 0: Greenfield service setup (worker) ⬜
+### Task 0: Greenfield service setup (worker) ✅
 **Original Story:** Infrastructure
 **Scope:** `worker`
 **Blocked by:** None (blocks every task with `worker` in its scope)
 
 **What to build:**
-A minimal worker service accessible in the development environment that returns `200 OK` on `GET /status`.
+A minimal worker service accessible in the development environment that returns `200 OK` on `GET /status`. Built as a Nest HTTP app in `apps/worker` and a `worker` Compose service. The route has no `/v1` prefix (that is the public API's), `PORT` defaults to 3001, and it is a liveness check only: it probes no dependency, since the worker has none yet.
 
 **Acceptance Criteria:**
-- [ ] `GET /status` returns `200 OK` in the development environment
+- [x] `GET /status` returns `200 OK` in the development environment
 
 ### Task 8: Events retention purge ⬜
 **Original Story:** Locked parameter

@@ -4,7 +4,7 @@ A multi-tenant platform that accepts events through a public REST API and reliab
 
 This is a **learning and portfolio project**. It is designed for a realistic production load (1,000 tenants, 5k events/s peak, fan-out 3, about 15k deliveries/s, first attempt within 5 s at p99), but built and demoed as a thin vertical slice at hundreds of events per second. Every simplification is deliberate and has a documented scale-up path.
 
-> **Status: Phase 1 is complete, Phase 2 has started.** `docker compose up` runs the whole Phase 1 stack: events are accepted through `POST /v1/events` (API key auth, idempotency, per-tenant rate limit), stored atomically in a Postgres outbox, moved onto RabbitMQ by the relay, and fanned out by the dispatcher into one delivery job per subscribed endpoint on the lane queues, with endpoint and subscription management around it. A dispatch that fails (a broker or database error) is retried after a pause through a retry queue, and only dead-lettered, with its reason, once its attempts run out. **Nothing delivers those jobs yet:** the signature service, the retry policy, the safe HTTP client, the SSRF guard and the retry queue declarations are built as modules, but the delivery worker that uses them, and the attempt log, are still to come, and everything after Phase 2 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
+> **Status: Phase 1 is complete, Phase 2 has started.** `docker compose up` runs the whole Phase 1 stack: events are accepted through `POST /v1/events` (API key auth, idempotency, per-tenant rate limit), stored atomically in a Postgres outbox, moved onto RabbitMQ by the relay, and fanned out by the dispatcher into one delivery job per subscribed endpoint on the lane queues, with endpoint and subscription management around it. A dispatch that fails (a broker or database error) is retried after a pause through a retry queue, and only dead-lettered, with its reason, once its attempts run out. **Nothing delivers those jobs yet:** the signature service, the retry policy, the safe HTTP client, the SSRF guard and the retry queue declarations are built as modules, but the delivery worker that will use them is only a shell (it answers `GET /status` and delivers nothing), and the attempt log is still to come, and everything after Phase 2 is described in the PRD only. Sections marked **(planned)** describe the target, not the current behaviour.
 
 ## Contents
 
@@ -94,6 +94,7 @@ apps/
   api/              @wdp/api: public REST API (ingestion, endpoints, subscriptions)
   relay/            @wdp/relay: outbox relay, Postgres events to RabbitMQ (no HTTP)
   dispatcher/       @wdp/dispatcher: fans each event out into delivery jobs on the lane queues (no HTTP)
+  worker/           @wdp/worker: the delivery worker; only its GET /status liveness endpoint exists so far
   mock-receiver/    @wdp/mock-receiver: a customer endpoint stand-in with configurable failures, latency and hangs
   ops/              @wdp/ops: the db:migrate and db:seed commands
 libs/
@@ -107,12 +108,12 @@ Dockerfile            one image for every service, Node 24 runtime
 docker-compose.yml    the full stack
 docs/
   PRD-v1.0.md       product requirements and locked design parameters
-  PRD-task-v1.7.md  implementation task breakdown, with status per task
+  PRD-task-v1.8.md  implementation task breakdown, with status per task
 tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
 
-`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, the signature service, the retry policy, the safe HTTP client, and the SSRF guard). `@wdp/messaging` holds the RabbitMQ layer (topology including the retry tier and delay queues, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (worker, gateway, dashboard) are added as the phases land.
+`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, the signature service, the retry policy, the safe HTTP client, and the SSRF guard). `@wdp/messaging` holds the RabbitMQ layer (topology including the retry tier and delay queues, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (gateway, dashboard) are added as the phases land.
 
 ### How workspace libraries resolve
 
@@ -153,7 +154,7 @@ docker compose up --build        # first run builds one image, about a minute an
 docker compose run --rm seed     # creates the "demo" tenant, prints its API key once
 ```
 
-`up` starts Postgres, MongoDB (unused until Phase 2), Redis, RabbitMQ, a one-shot `migrate` that applies the SQL migrations, then the `api` (port 3000), `relay`, `dispatcher` and `mock-receiver` (port 4000). The RabbitMQ management UI is at <http://localhost:15672> (login `guest` / `guest`). `docker compose run --rm seed --tenant acme` seeds another tenant; running it again reuses the tenant and issues one more key, and earlier keys keep working.
+`up` starts Postgres, MongoDB (unused until Phase 2), Redis, RabbitMQ, a one-shot `migrate` that applies the SQL migrations, then the `api` (port 3000), `relay`, `dispatcher`, `worker` (port 3001, `GET /status` only) and `mock-receiver` (port 4000). The RabbitMQ management UI is at <http://localhost:15672> (login `guest` / `guest`). `docker compose run --rm seed --tenant acme` seeds another tenant; running it again reuses the tenant and issues one more key, and earlier keys keep working.
 
 The demo path, with the key from `seed` in `$KEY`:
 
@@ -229,6 +230,12 @@ The API validates these at boot and refuses to start if one is invalid or a requ
 | `INGEST_BURST` | `200` | Per-tenant ingest limit, bucket size |
 | `SSRF_ALLOW_HOSTS` | empty | Comma-separated hosts that may be registered as endpoints over plain http and any port. Development only, so the Compose mock receiver can be used; keep empty in production. The connect-time SSRF guard is built in `@wdp/core`; the worker applies it, with this same list, from Task 14 |
 
+The worker reads one variable so far:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `3001` | HTTP port of `GET /status` |
+
 The relay reads `DATABASE_URL` too, plus:
 
 | Variable | Default | Purpose |
@@ -282,7 +289,7 @@ The three demo scenes: (1) kill the receiver and watch retries, the breaker open
 ## Documentation
 
 - [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md): the product requirements document, covering scope, user stories, deep modules, implementation decisions and locked parameters, testing strategy, phases and risks.
-- [`docs/PRD-task-v1.7.md`](docs/PRD-task-v1.7.md): the implementation task breakdown, with the status of every task.
+- [`docs/PRD-task-v1.8.md`](docs/PRD-task-v1.8.md): the implementation task breakdown, with the status of every task.
 
 ## License
 

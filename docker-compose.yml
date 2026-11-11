@@ -127,6 +127,26 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The delivery worker. Only its status endpoint exists so far; it needs no
+  # dependency until it consumes the lanes (Task 14).
+  worker:
+    <<: *app
+    command: ["node", "apps/worker/dist/main.js"]
+    environment:
+      <<: *env
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3001/status').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # A stand-in for a customer's endpoint. Nothing calls it before Phase 2.
   mock-receiver:
     <<: *app
