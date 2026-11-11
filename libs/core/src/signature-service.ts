@@ -3,17 +3,37 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 const SECRET_PREFIX = 'whsec_';
 const SECRET_BYTES = 32;
 const SIGNATURE_VERSION = 'v1';
+/** PRD: receivers reject timestamps more than 5 minutes off. */
+export const DEFAULT_TOLERANCE_SECONDS = 300;
 const ENTRY_PREFIX = `${SIGNATURE_VERSION},`;
 // Standard base64 with optional padding. Buffer.from(..., 'base64') silently
 // skips invalid characters and stops at '=', so the shape is checked before
 // decoding: otherwise junk appended to a valid signature would still verify.
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
+export interface SignatureServiceOptions {
+  /** How far `timestamp` may be from `now`, in either direction. */
+  toleranceSeconds?: number;
+}
+
 /**
  * Signs and verifies webhook requests in the Standard Webhooks style: an
  * HMAC-SHA256 over `<id>.<timestamp>.<rawBody>`, sent as `v1,<base64>`.
  */
 export class SignatureService {
+  private readonly toleranceSeconds: number;
+
+  constructor({
+    toleranceSeconds = DEFAULT_TOLERANCE_SECONDS,
+  }: SignatureServiceOptions = {}) {
+    if (!Number.isInteger(toleranceSeconds) || toleranceSeconds < 1) {
+      throw new RangeError(
+        `toleranceSeconds must be a positive integer, got ${toleranceSeconds}`,
+      );
+    }
+    this.toleranceSeconds = toleranceSeconds;
+  }
+
   /**
    * Returns the `webhook-signature` header value: one `v1,<base64>` entry per
    * secret, space-separated, in the order given (several during a rotation).
@@ -32,8 +52,10 @@ export class SignatureService {
   }
 
   /**
-   * True when any `v1` entry of the header matches the signature of any of the
-   * secrets. Accepting either secret is what lets a receiver cut over during a
+   * True when the timestamp is within the tolerance of `now` and any `v1` entry
+   * of the header matches the signature of any of the secrets. The window
+   * makes a captured request useless to replay; it is checked in both
+   * directions, so a timestamp from the future is refused too. Accepting either secret is what lets a receiver cut over during a
    * rotation. Anything unusable in the header (other versions, junk, a wrong
    * length) is skipped, never thrown: the header is attacker input. A bad
    * secret does throw, since that is a configuration bug.
@@ -44,7 +66,14 @@ export class SignatureService {
     timestamp: number,
     rawBody: string | Uint8Array,
     secrets: readonly string[],
+    now: Date,
   ): boolean {
+    // Checked first: a stale request is refused before any HMAC work. Written
+    // as "not within" so a NaN (an invalid Date) is refused, not waved through.
+    const ageSeconds = Math.floor(now.getTime() / 1000) - timestamp;
+    if (!(Math.abs(ageSeconds) <= this.toleranceSeconds)) {
+      return false;
+    }
     const expected = computeSignatures(secrets, id, timestamp, rawBody);
     const presented = parseHeader(header);
     // Every pair is compared, without stopping at the first match, so the time

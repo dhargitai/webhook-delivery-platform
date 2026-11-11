@@ -94,6 +94,8 @@ describe('SignatureService.verify', () => {
       overrides.timestamp ?? TIMESTAMP,
       overrides.body ?? BODY,
       overrides.secrets ?? [SECRET],
+      // The request was just made: well inside the window.
+      new Date(TIMESTAMP * 1000),
     );
 
   it('accepts a header produced by sign', () => {
@@ -170,5 +172,122 @@ describe('SignatureService.verify', () => {
       /secret/i,
     );
     expect(() => verify(BODY_SIGNATURE, { secrets: [] })).toThrow(/secret/i);
+  });
+});
+
+describe('SignatureService tolerance window', () => {
+  const HOUR = 3600;
+  const at = (secondsAfterTimestamp: number) =>
+    new Date((TIMESTAMP + secondsAfterTimestamp) * 1000);
+  const verifyAt = (service: SignatureService, now: Date) =>
+    service.verify(BODY_SIGNATURE, ID, TIMESTAMP, BODY, [SECRET], now);
+
+  describe('by default (5 minutes)', () => {
+    const service = new SignatureService();
+
+    it.each([
+      { name: 'just made', seconds: 0, accepted: true },
+      { name: '300 s old', seconds: 300, accepted: true },
+      { name: '301 s old', seconds: 301, accepted: false },
+      { name: '300 s in the future', seconds: -300, accepted: true },
+      { name: '301 s in the future', seconds: -301, accepted: false },
+      { name: '300.9 s old (whole seconds)', seconds: 300.9, accepted: true },
+    ])('a request $name is accepted: $accepted', ({ seconds, accepted }) => {
+      expect(verifyAt(service, at(seconds))).toBe(accepted);
+    });
+
+    it('rejects a captured request replayed 20 hours later', () => {
+      expect(verifyAt(service, at(20 * HOUR))).toBe(false);
+    });
+
+    it('accepts the same event re-signed with a fresh timestamp', () => {
+      // What a retry does: the id and body stay, the timestamp is renewed.
+      const freshTimestamp = TIMESTAMP + 20 * HOUR;
+      const header = service.sign([SECRET], ID, freshTimestamp, BODY);
+
+      expect(
+        service.verify(
+          header,
+          ID,
+          freshTimestamp,
+          BODY,
+          [SECRET],
+          new Date(freshTimestamp * 1000),
+        ),
+      ).toBe(true);
+    });
+
+    it('still rejects a wrong signature on a fresh timestamp', () => {
+      expect(
+        service.verify(
+          BODY_SIGNATURE,
+          ID,
+          TIMESTAMP,
+          `${BODY} `,
+          [SECRET],
+          at(0),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe('with a custom tolerance', () => {
+    it.each([
+      { seconds: 10, accepted: true },
+      { seconds: 11, accepted: false },
+      { seconds: -10, accepted: true },
+      { seconds: -11, accepted: false },
+    ])('of 10 s accepts $seconds s: $accepted', ({ seconds, accepted }) => {
+      const service = new SignatureService({ toleranceSeconds: 10 });
+
+      expect(verifyAt(service, at(seconds))).toBe(accepted);
+    });
+
+    it('is not narrowed by the default', () => {
+      const service = new SignatureService({ toleranceSeconds: 600 });
+
+      expect(verifyAt(service, at(500))).toBe(true);
+    });
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses a tolerance of %s',
+    (toleranceSeconds) => {
+      expect(() => new SignatureService({ toleranceSeconds })).toThrow(
+        RangeError,
+      );
+    },
+  );
+});
+
+describe('SignatureService with an unusable clock or timestamp', () => {
+  const service = new SignatureService();
+
+  it('refuses an invalid Date instead of treating it as inside the window', () => {
+    expect(
+      service.verify(
+        BODY_SIGNATURE,
+        ID,
+        TIMESTAMP,
+        BODY,
+        [SECRET],
+        new Date(Number.NaN),
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a NaN timestamp', () => {
+    const header = service.sign([SECRET], ID, Number.NaN, BODY);
+
+    expect(
+      service.verify(
+        header,
+        ID,
+        Number.NaN,
+        BODY,
+        [SECRET],
+        new Date(TIMESTAMP * 1000),
+      ),
+    ).toBe(false);
   });
 });
