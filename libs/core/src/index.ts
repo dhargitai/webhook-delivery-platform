@@ -22,6 +22,7 @@ export {
   verifyApiKey,
   type GeneratedApiKey,
 } from './api-key.js';
+export { generateEndpointSecret } from './endpoint-secret.js';
 export { SignatureService } from './signature-service.js';
 export {
   isBlockedAddress,
