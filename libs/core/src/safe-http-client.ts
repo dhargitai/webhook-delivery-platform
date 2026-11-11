@@ -9,7 +9,7 @@ export interface SafeHttpClientOptions {
   snippetBytes?: number;
 }
 
-export type HttpFailureKind = 'http_error' | 'network_error';
+export type HttpFailureKind = 'http_error' | 'redirect' | 'network_error';
 
 export type HttpResult =
   | { outcome: 'success'; status: number; latencyMs: number; snippet: string }
@@ -69,17 +69,27 @@ export class SafeHttpClient {
           res.on('end', () => {
             const status = res.statusCode ?? 0;
             const snippet = Buffer.concat(chunks).toString('utf8');
-            resolve(
-              status >= 200 && status < 300
-                ? { outcome: 'success', status, latencyMs: latency(), snippet }
-                : {
-                    outcome: 'failed',
-                    kind: 'http_error',
-                    status,
-                    latencyMs: latency(),
-                    snippet,
-                  },
-            );
+            if (status >= 200 && status < 300) {
+              resolve({
+                outcome: 'success',
+                status,
+                latencyMs: latency(),
+                snippet,
+              });
+              return;
+            }
+            // Node's http never follows a redirect, and neither do we: the
+            // Location header is receiver-controlled, so following it would
+            // let a public URL send the request to an internal host.
+            const kind =
+              status >= 300 && status < 400 ? 'redirect' : 'http_error';
+            resolve({
+              outcome: 'failed',
+              kind,
+              status,
+              latencyMs: latency(),
+              snippet,
+            });
           });
           res.on('error', (error) => resolve(networkError(error, latency())));
         },

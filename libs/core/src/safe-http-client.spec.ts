@@ -113,6 +113,34 @@ describe('SafeHttpClient.post', () => {
     },
   );
 
+  it.each([300, 301, 302, 303, 307, 308, 399])(
+    'reports a %i redirect instead of following it',
+    async (status) => {
+      const { url } = await listen(answer(status));
+
+      const result = await client.post(url, {}, '{}');
+
+      expect(result).toMatchObject({
+        outcome: 'failed',
+        kind: 'redirect',
+        status,
+      });
+    },
+  );
+
+  it('never contacts the redirect target', async () => {
+    const target = await listen(answer(200));
+    const { url } = await listen((res) => {
+      res.writeHead(307, { location: target.url });
+      res.end();
+    });
+
+    await client.post(url, {}, '{}');
+
+    // A followed redirect is how a public URL reaches an internal host.
+    expect(target.received).toHaveLength(0);
+  });
+
   it.each([300, 399])('does not treat %i as a success', async (status) => {
     const { url } = await listen(answer(status));
 
