@@ -13,7 +13,11 @@ class FakeEndpointsRepository extends EndpointsRepository {
   readonly subscriptions = new Map<string, string[]>();
   private counter = 0;
 
-  async create(tenantId: string, input: NewEndpoint): Promise<Endpoint> {
+  async create(
+    tenantId: string,
+    input: NewEndpoint,
+    _signingSecret: string,
+  ): Promise<Endpoint> {
     this.counter += 1;
     const endpoint: Endpoint = {
       id: `ep-${this.counter}`,

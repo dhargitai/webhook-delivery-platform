@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { generateEndpointSecret } from '@wdp/core';
 import { EndpointNotFoundError } from '@wdp/domain';
 import {
   type Endpoint,
@@ -11,7 +12,7 @@ export class EndpointsService {
   constructor(private readonly endpoints: EndpointsRepository) {}
 
   create(tenantId: string, input: NewEndpoint): Promise<Endpoint> {
-    return this.endpoints.create(tenantId, input);
+    return this.endpoints.create(tenantId, input, generateEndpointSecret());
   }
 
   list(tenantId: string): Promise<Endpoint[]> {

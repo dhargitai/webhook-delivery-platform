@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import {
   createTestDatabase,
   type TestDatabase,
 } from '../testing/test-database.js';
-import { migrate } from './migrate.js';
+import { MIGRATIONS_DIR, migrate } from './migrate.js';
 
 describe('database schema (real Postgres)', () => {
   let testDb: TestDatabase;
@@ -31,8 +34,8 @@ describe('database schema (real Postgres)', () => {
 
   async function insertEndpoint(tenantId: string): Promise<string> {
     const { rows } = await pool.query<{ id: string }>(
-      'INSERT INTO endpoints (tenant_id, url) VALUES ($1, $2) RETURNING id',
-      [tenantId, 'https://hooks.acme.test/in'],
+      'INSERT INTO endpoints (tenant_id, url, signing_secret) VALUES ($1, $2, $3) RETURNING id',
+      [tenantId, 'https://hooks.acme.test/in', 'whsec_test'],
     );
     return rows[0]?.id ?? '';
   }
@@ -90,6 +93,70 @@ describe('database schema (real Postgres)', () => {
 
       expect(rows).toHaveLength(1);
       expect(rows[0]?.indexdef).toContain('WHERE (published_at IS NULL)');
+    });
+  });
+
+  describe('endpoints', () => {
+    it('rejects an endpoint without a signing secret', async () => {
+      const tenantId = await insertTenant();
+
+      await expect(
+        pool.query('INSERT INTO endpoints (tenant_id, url) VALUES ($1, $2)', [
+          tenantId,
+          'https://hooks.acme.test/in',
+        ]),
+      ).rejects.toMatchObject({ code: '23502' });
+    });
+
+    it('gives endpoints that predate the signing secret their own valid one', async () => {
+      const adminUrl = inject('postgresAdminUrl');
+      const name = `wdp_test_${randomUUID().replaceAll('-', '')}`;
+      const admin = new pg.Client({ connectionString: adminUrl });
+      await admin.connect();
+      await admin.query(`CREATE DATABASE "${name}"`);
+      const url = new URL(adminUrl);
+      url.pathname = `/${name}`;
+      // Only the migrations that existed before the signing secret.
+      const oldDir = await mkdtemp(join(tmpdir(), 'wdp-migrations-'));
+      const client = new pg.Client({ connectionString: url.toString() });
+      try {
+        for (const file of [
+          '0001_tenants-and-api-keys.sql',
+          '0002_endpoints-and-subscriptions.sql',
+          '0003_events.sql',
+        ]) {
+          await copyFile(join(MIGRATIONS_DIR, file), join(oldDir, file));
+        }
+        await migrate(url.toString(), oldDir);
+        await client.connect();
+        const { rows: tenants } = await client.query<{ id: string }>(
+          `INSERT INTO tenants (name) VALUES ('old') RETURNING id`,
+        );
+        for (let i = 0; i < 2; i++) {
+          await client.query(
+            'INSERT INTO endpoints (tenant_id, url) VALUES ($1, $2)',
+            [tenants[0]?.id, 'https://hooks.acme.test/in'],
+          );
+        }
+
+        await migrate(url.toString());
+
+        const { rows } = await client.query<{ signing_secret: string }>(
+          'SELECT signing_secret FROM endpoints',
+        );
+        expect(rows).toHaveLength(2);
+        for (const row of rows) {
+          expect(row.signing_secret).toMatch(/^whsec_[A-Za-z0-9+/]{43}=$/);
+        }
+        expect(rows[0]?.signing_secret).not.toBe(rows[1]?.signing_secret);
+      } finally {
+        await client.end();
+        await rm(oldDir, { recursive: true, force: true });
+        // Waits for the client above to be gone before dropping.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+        await admin.end();
+      }
     });
   });
 

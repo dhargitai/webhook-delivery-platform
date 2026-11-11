@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Kysely } from 'kysely';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { createDatabase, type Database } from '../db/database.js';
+import { generateEndpointSecret } from '../endpoint-secret.js';
 import {
   createTestDatabase,
   type TestDatabase,
@@ -44,6 +45,7 @@ describe('KyselySubscriptionLookup (real Postgres)', () => {
       .values({
         tenant_id: tenantId,
         url: 'https://hooks.acme.test/in',
+        signing_secret: generateEndpointSecret(),
         status,
       })
       .returning('id')

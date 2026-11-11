@@ -34,13 +34,18 @@ export class KyselyEndpointsRepository extends EndpointsRepository {
     super();
   }
 
-  async create(tenantId: string, input: NewEndpoint): Promise<Endpoint> {
+  async create(
+    tenantId: string,
+    input: NewEndpoint,
+    signingSecret: string,
+  ): Promise<Endpoint> {
     const row = await this.db
       .insertInto('endpoints')
       .values({
         tenant_id: tenantId,
         url: input.url,
         description: input.description,
+        signing_secret: signingSecret,
       })
       .returningAll()
       .executeTakeFirstOrThrow();

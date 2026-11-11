@@ -19,7 +19,15 @@ export interface NewEndpoint {
  * id from another tenant behaves exactly like an id that does not exist.
  */
 export abstract class EndpointsRepository {
-  abstract create(tenantId: string, input: NewEndpoint): Promise<Endpoint>;
+  /**
+   * `signingSecret` is stored with the endpoint and never read back through
+   * this contract: the returned `Endpoint` has no secret.
+   */
+  abstract create(
+    tenantId: string,
+    input: NewEndpoint,
+    signingSecret: string,
+  ): Promise<Endpoint>;
 
   /** In creation order. */
   abstract list(tenantId: string): Promise<Endpoint[]>;
