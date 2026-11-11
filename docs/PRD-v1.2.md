@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.1
+**Version:** 1.2
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -349,7 +349,7 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 
 **Deliverables**
 
-- ⬜ Delivery worker with the SafeHttpClient and signing (the SignatureService, SafeHttpClient and SsrfGuard modules are built; the worker consuming the lanes is not)
+- ✅ Delivery worker with the SafeHttpClient and signing (it consumes the lanes, signs and POSTs each job; a failed attempt is logged and not retried yet, which needs the retry tiers below)
 - ⬜ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor (the RetryPolicy and the topology are built; the worker that publishes to them is not)
 - ⬜ Correct ack ordering, quorum queues with delivery limit, graceful shutdown (quorum queues and the delivery limit are built; the rest needs the worker)
 - ⬜ Mongo attempt log with indexes and TTL
