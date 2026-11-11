@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.6
+**Version:** 1.7
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -202,24 +202,24 @@ Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and 
 **Blocked by:** None
 
 **What to build:**
-`post(url, headers, body) -> Result` with a 3 s connect and 10 s total timeout, no redirects and a 64 KB response cap, classifying outcomes. The limits are constructor options (`connectTimeoutMs`, `totalTimeoutMs`, `maxResponseBytes`), not a `limits` argument. A failed result has a `kind`: `http_error`, `redirect`, `response_too_large` (also for a 2xx), `connect_timeout`, `timeout`, `network_error` or `invalid_url`; `post` never throws. An optional `lookup` option is the connect-time DNS hook Task 12 plugs into.
+`post(url, headers, body) -> Result` with a 3 s connect and 10 s total timeout, no redirects and a 64 KB response cap, classifying outcomes. The limits are constructor options (`connectTimeoutMs`, `totalTimeoutMs`, `maxResponseBytes`), not a `limits` argument. A failed result has a `kind`: `http_error`, `redirect`, `response_too_large` (also for a 2xx), `connect_timeout`, `timeout`, `network_error`, `ssrf_blocked` (added by Task 12) or `invalid_url`; `post` never throws. An optional `lookup` option is the connect-time DNS hook Task 12 plugs into.
 
 **Acceptance Criteria:**
 - [x] Timeouts, redirects and oversized responses each produce a distinct failed result
 - [x] Only 2xx is a success
 
-### Task 12: Connect-time SSRF guard ⬜
+### Task 12: Connect-time SSRF guard ✅
 **Original Story:** 25
 **Scope:** `core`
 **Blocked by:** Task 11
 
 **What to build:**
-Resolve DNS, check the deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), and pin the IP with correct SNI and Host. A dev-only `SSRF_ALLOW_HOSTS` allowlist stays off in the suite. The guard plugs into `SafeHttpClient` through its `lookup` option; Task 11's tests cover only plain http, so the https path (SNI, `secureConnect`) is tested here.
+Resolve DNS, check the deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), and pin the IP with correct SNI and Host. A dev-only `SSRF_ALLOW_HOSTS` allowlist stays off in the suite. The guard plugs into `SafeHttpClient` through its `lookup` option; Task 11's tests cover only plain http, so the https path (SNI, `secureConnect`) is tested here. Built as `SsrfGuard` and `isBlockedAddress` in `@wdp/core`: `lookup` resolves, refuses the whole host if any address is blocked, and returns the checked addresses; nothing is cached. Node never calls `lookup` for a host that is already an IP address, so `blockedHostReason` and the client's `hostCheck` option cover those. A refusal is a failed result of kind `ssrf_blocked`. The client also got a `ca` option (extra trusted root, verification stays on), used by the https tests.
 
 **Acceptance Criteria:**
-- [ ] The suite blocks every deny-list category
-- [ ] A DNS rebinding case is blocked using a fake resolver
-- [ ] The connection uses the checked IP
+- [x] The suite blocks every deny-list category
+- [x] A DNS rebinding case is blocked using a fake resolver
+- [x] The connection uses the checked IP
 
 ### Task 13: Explained URL rejections at registration ⬜
 **Original Story:** 6 (rest)
@@ -238,7 +238,7 @@ Registration resolves the host and rejects disallowed targets with a reason.
 **Blocked by:** Tasks 0, 6, 9, 10, 12
 
 **What to build:**
-The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through the SafeHttpClient and the SSRF guard, and acks. `webhook-id` is stable and `webhook-timestamp` is regenerated on every attempt.
+The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through the SafeHttpClient and the SSRF guard (one `SsrfGuard` supplies the client's `lookup` and `hostCheck`, with `SSRF_ALLOW_HOSTS` read by the worker), and acks. `webhook-id` is stable and `webhook-timestamp` is regenerated on every attempt.
 
 **Acceptance Criteria:**
 - [ ] An accepted event reaches the mock receiver with a valid signature
