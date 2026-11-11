@@ -29,6 +29,7 @@ export {
   EVENT_PUBLISHED_ROUTING_KEY,
   FAILURE_KIND_HEADER,
   FAILURE_REASON_HEADER,
+  RETRY_READY_ROUTING_KEY,
   topologyNames,
   type TopologyNames,
 } from './names.js';
