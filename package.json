@@ -14,6 +14,8 @@
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\" \"test/**/*.ts\"",
     "lint": "oxlint --type-aware apps/ libs/ test/",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "db:migrate": "bun run --cwd apps/ops migrate",
+    "db:seed": "bun run --cwd apps/ops seed",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",

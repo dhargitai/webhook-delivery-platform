@@ -65,6 +65,24 @@
         "amqplib": "^2.3.1",
       },
     },
+    "apps/mock-receiver": {
+      "name": "@wdp/mock-receiver",
+      "version": "0.0.1",
+      "dependencies": {
+        "@nestjs/common": "^12.0.1",
+        "reflect-metadata": "^0.2.2",
+        "rxjs": "^7.8.1",
+        "zod": "^4.6.7",
+      },
+    },
+    "apps/ops": {
+      "name": "@wdp/ops",
+      "version": "0.0.1",
+      "dependencies": {
+        "@wdp/core": "workspace:*",
+        "kysely": "^0.29.8",
+      },
+    },
     "apps/relay": {
       "name": "@wdp/relay",
       "version": "0.0.1",
@@ -398,7 +416,11 @@
 
     "@wdp/messaging": ["@wdp/messaging@workspace:libs/messaging"],
 
+    "@wdp/mock-receiver": ["@wdp/mock-receiver@workspace:apps/mock-receiver"],
+
     "@wdp/observability": ["@wdp/observability@workspace:libs/observability"],
+
+    "@wdp/ops": ["@wdp/ops@workspace:apps/ops"],
 
     "@wdp/relay": ["@wdp/relay@workspace:apps/relay"],
 

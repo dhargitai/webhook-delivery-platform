@@ -13,7 +13,6 @@ import { CurrentTenant } from '../auth/current-tenant.decorator.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import {
   type CreateEndpointBody,
-  createEndpointSchema,
   type ReplaceSubscriptionsBody,
   replaceSubscriptionsSchema,
 } from './endpoint.schemas.js';
@@ -21,6 +20,7 @@ import {
   type EndpointResponse,
   toEndpointResponse,
 } from './endpoint.response.js';
+import { CreateEndpointPipe } from './create-endpoint.pipe.js';
 import { EndpointsService } from './endpoints.service.js';
 
 interface SubscriptionsResponse {
@@ -34,7 +34,7 @@ export class EndpointsController {
   @Post()
   async create(
     @CurrentTenant() tenantId: string,
-    @Body(new ZodValidationPipe(createEndpointSchema)) body: CreateEndpointBody,
+    @Body(CreateEndpointPipe) body: CreateEndpointBody,
   ): Promise<EndpointResponse> {
     return toEndpointResponse(await this.endpoints.create(tenantId, body));
   }

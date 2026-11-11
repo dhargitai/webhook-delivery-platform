@@ -6,7 +6,7 @@ import {
 
 describe('createEndpointSchema', () => {
   it('normalises the URL and defaults the description to null', () => {
-    const result = createEndpointSchema.parse({
+    const result = createEndpointSchema().parse({
       url: 'https://HOOKS.acme.test:443/in',
     });
 
@@ -18,7 +18,7 @@ describe('createEndpointSchema', () => {
 
   it('keeps a given description', () => {
     expect(
-      createEndpointSchema.parse({
+      createEndpointSchema().parse({
         url: 'https://hooks.acme.test/in',
         description: 'billing',
       }).description,
@@ -26,7 +26,7 @@ describe('createEndpointSchema', () => {
   });
 
   it('explains why a URL was rejected, on the url field', () => {
-    const result = createEndpointSchema.safeParse({
+    const result = createEndpointSchema().safeParse({
       url: 'http://hooks.acme.test/in',
     });
 
@@ -52,7 +52,24 @@ describe('createEndpointSchema', () => {
       body: { url: 'https://hooks.acme.test/in', status: 'disabled' },
     },
   ])('rejects $name', ({ body }) => {
-    expect(createEndpointSchema.safeParse(body).success).toBe(false);
+    expect(createEndpointSchema().safeParse(body).success).toBe(false);
+  });
+});
+
+describe('createEndpointSchema with allowed hosts', () => {
+  const schema = createEndpointSchema(['mock-receiver']);
+
+  it('accepts an http URL on an allowed host', () => {
+    expect(schema.parse({ url: 'http://mock-receiver:4000/hook' }).url).toBe(
+      'http://mock-receiver:4000/hook',
+    );
+  });
+
+  it('still rejects a host that is not allowed, with the https reason', () => {
+    const result = schema.safeParse({ url: 'http://other:4000/hook' });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toMatch(/https/i);
   });
 });
 
