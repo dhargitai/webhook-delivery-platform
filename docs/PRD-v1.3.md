@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.2
+**Version:** 1.3
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -192,7 +192,7 @@ One monorepo with deployable apps (API, relay, dispatcher, worker, dashboard gat
 ### Attempt log and dashboard
 
 - **Attempt document:** `tenant_id, endpoint_id, event_id, delivery_id, attempt_no, ts, status, http_status, latency_ms, response_snippet (<= 1 KB), error`.
-- **Indexes:** all end in `ts desc, _id desc` so the sort is covered: `{tenant_id, ts, _id}`, `{tenant_id, endpoint_id, ts, _id}`, `{tenant_id, status, ts, _id}`, `{tenant_id, event_id}`. Verify each with `explain()`: an index scan and no sort stage.
+- **Indexes:** all end in `ts desc, _id desc` so the sort is covered: `{tenant_id, ts, _id}`, `{tenant_id, endpoint_id, ts, _id}`, `{tenant_id, status, ts, _id}`, `{tenant_id, event_id, ts, _id}`. Verify each with `explain()`: an index scan and no sort stage.
 - **Retention:** a TTL index on `ts` (30 days). If the deleter lags at high insert rates, switch to daily collections that are dropped.
 - **Pagination:** opaque keyset cursor `{ts, _id}`, fetch `limit + 1` to know `hasMore`, no exact total count.
 - **Live view:** workers publish a small attempt summary to a topic exchange (`tenant.<id>.attempt`). Each gateway instance binds an exclusive auto-delete queue only for connected tenants. The gateway batches with RxJS `bufferTime` per room. Live is best effort; the client catches up through the cursor API.
@@ -352,7 +352,7 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 - ✅ Delivery worker with the SafeHttpClient and signing (it consumes the lanes, signs and POSTs each job; a failed attempt is logged and not retried yet, which needs the retry tiers below)
 - ⬜ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor (the RetryPolicy and the topology are built; the worker that publishes to them is not)
 - ⬜ Correct ack ordering, quorum queues with delivery limit, graceful shutdown (quorum queues and the delivery limit are built; the rest needs the worker)
-- ⬜ Mongo attempt log with indexes and TTL
+- ✅ Mongo attempt log with indexes and TTL (the worker writes one document per attempt before it acks; nothing reads it through the API yet)
 
 **Validation:** failing receiver produces the scheduled attempts then a DLQ entry; killed worker loses nothing; retry timestamps are fresh while `webhook-id` is stable.
 
