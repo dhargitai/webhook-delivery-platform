@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.3
+**Version:** 1.4
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -258,18 +258,18 @@ Write one attempt document per attempt (status, HTTP code, latency, snippet up t
 - [ ] Every attempt is recorded with the PRD fields
 - [ ] The indexes and the TTL exist
 
-### Task 16: RetryPolicy ⬜
+### Task 16: RetryPolicy ✅
 **Original Story:** 21
 **Scope:** `core`
 **Blocked by:** None
 
 **What to build:**
-A pure `next(attempt, now, rng) -> {action, delay, tier, bucket}`: 7 tiers (5 s to 10 h), 3 jitter buckets (0.8x, 1.0x, 1.2x), `TIME_SCALE` with floors.
+A pure `next(attempt, rng) -> {action, delay, tier, bucket}` (no `now`: nothing in the result depends on a clock; `attempt` is the 1-based failed attempt): 7 tiers (5 s to 10 h), 3 jitter buckets (0.8x, 1.0x, 1.2x), `TIME_SCALE` with floors, passed as the `timeScale` and `minDelayMs` options.
 
 **Acceptance Criteria:**
-- [ ] The schedule and jitter bounds are table-tested
-- [ ] The 8th failed attempt returns `dead`
-- [ ] The time scale and its floor are applied
+- [x] The schedule and jitter bounds are table-tested
+- [x] The 8th failed attempt returns `dead`
+- [x] The time scale and its floor are applied
 
 ### Task 17: Retry tier topology ⬜
 **Original Story:** 21
@@ -277,7 +277,7 @@ A pure `next(attempt, now, rng) -> {action, delay, tier, bucket}`: 7 tiers (5 s 
 **Blocked by:** Task 16
 
 **What to build:**
-21 fixed-TTL tier queues that dead-letter into `retry.ready`, with queue names that encode the scaled delay. Also the short delay queue (5 s, scaled) that returns a parked job to its fresh lane, used by Tasks 24 and 27. New working queues reuse the existing quorum arguments (delivery limit and dead-letter exchange).
+21 fixed-TTL tier queues that dead-letter into `retry.ready`, with queue names that encode the scaled delay (a floor can give a tier's three buckets the same delay, so identical names are declared once). Also the short delay queue (5 s, scaled) that returns a parked job to its fresh lane, used by Tasks 24 and 27. New working queues reuse the existing quorum arguments (delivery limit and dead-letter exchange).
 
 **Acceptance Criteria:**
 - [ ] Against a real broker, a message returns to `retry.ready` after its TTL
