@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.9
+**Version:** 1.10
 **Source PRD:** PRD-v1.1
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -191,19 +191,19 @@ A daily batched purge of published `events` rows older than 30 days.
 - [ ] Published rows older than 30 days are removed in batches
 - [ ] Unpublished rows are never removed, whatever their age
 
-### Task 9: Endpoint signing secret ⬜
+### Task 9: Endpoint signing secret ✅
 
 **Original Story:** 4
 **Scope:** `api`, Postgres
 **Blocked by:** Task 4
 
 **What to build:**
-Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and shows it once. The secret is stored in plaintext until Task 22 lands; Task 22 is blocked only by this task, so it can follow straight after.
+Creating an endpoint generates a `whsec_<base64 of 32 random bytes>` secret and shows it once. The secret is stored in plaintext until Task 22 lands; Task 22 is blocked only by this task, so it can follow straight after. Built as `generateEndpointSecret` in `@wdp/core`, stored in `endpoints.signing_secret` (migration 0004 backfills existing endpoints, so none is without a secret), and returned as `secret` by `POST /v1/endpoints` only. Nothing reads it back yet: the worker's read path belongs to Task 14, rotation to Task 29.
 
 **Acceptance Criteria:**
 
-- [ ] The creation response contains the secret, and later reads do not
-- [ ] Each endpoint gets a distinct secret
+- [x] The creation response contains the secret, and later reads do not
+- [x] Each endpoint gets a distinct secret
 
 ### Task 10: SignatureService ✅
 
