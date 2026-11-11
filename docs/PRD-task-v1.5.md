@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.4
+**Version:** 1.5
 **Source PRD:** PRD-v1.0
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -271,18 +271,18 @@ A pure `next(attempt, rng) -> {action, delay, tier, bucket}` (no `now`: nothing 
 - [x] The 8th failed attempt returns `dead`
 - [x] The time scale and its floor are applied
 
-### Task 17: Retry tier topology ⬜
+### Task 17: Retry tier topology ✅
 **Original Story:** 21
 **Scope:** `messaging`
 **Blocked by:** Task 16
 
 **What to build:**
-21 fixed-TTL tier queues that dead-letter into `retry.ready`, with queue names that encode the scaled delay (a floor can give a tier's three buckets the same delay, so identical names are declared once). Also the short delay queue (5 s, scaled) that returns a parked job to its fresh lane, used by Tasks 24 and 27. New working queues reuse the existing quorum arguments (delivery limit and dead-letter exchange).
+21 fixed-TTL tier queues that dead-letter into `retry.ready`, with queue names that encode the scaled delay (a floor can give a tier's three buckets the same delay, so identical names are declared once). Also the short delay queue (5 s, scaled) that returns a parked job to its fresh lane, used by Tasks 24 and 27: one per lane, so it can dead-letter by a fixed routing key straight back to that lane. `retry.ready` reuses the existing quorum arguments (delivery limit and dead-letter exchange); the tier and delay queues are quorum queues with a fixed TTL and no delivery limit, since nothing consumes them. Built as `declareRetryTopology` in `@wdp/messaging`, fed from `RetryPolicy.delays()` and `parkDelayMs`; a worker publishes to a queue by name (`retryTierQueue(delay)`, `parkQueue(delay, lane)`) on the default exchange.
 
 **Acceptance Criteria:**
-- [ ] Against a real broker, a message returns to `retry.ready` after its TTL
-- [ ] Against a real broker, a parked job returns to its own fresh lane after the delay
-- [ ] A new `TIME_SCALE` creates new queues instead of failing
+- [x] Against a real broker, a message returns to `retry.ready` after its TTL
+- [x] Against a real broker, a parked job returns to its own fresh lane after the delay
+- [x] A new `TIME_SCALE` creates new queues instead of failing
 
 ### Task 18: Failed attempt becomes a retry, with correct ack order ⬜
 **Original Story:** 21, 23
@@ -316,7 +316,7 @@ After the 8th failed attempt, publish the job to the DLQ with the failure reason
 **Blocked by:** None (built in Phase 1)
 
 **What to build:**
-Quorum queues with `delivery-limit` 5, dead-lettering to the DLQ. Every working queue already gets these arguments; new queues inherit them through Task 17.
+Quorum queues with `delivery-limit` 5, dead-lettering to the DLQ. Every working queue already gets these arguments, and `retry.ready` (Task 17) inherits them; the TTL queues of Task 17 do not, since nothing consumes them.
 
 **Acceptance Criteria:**
 - [x] A message that keeps killing its consumers ends up in the DLQ after the first delivery plus 5 redeliveries
