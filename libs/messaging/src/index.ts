@@ -36,10 +36,12 @@ export {
 export {
   declareDispatchRetryTopology,
   declareEventTopology,
+  declareRetryTopology,
   declareTopology,
   DELIVERY_LIMIT,
   quorumQueueArguments,
   type DispatchRetryOptions,
   type EventTopologyOptions,
+  type RetryTopologyOptions,
   type TopologyOptions,
 } from './topology.js';
