@@ -24,6 +24,12 @@ export {
 } from './api-key.js';
 export { SignatureService } from './signature-service.js';
 export {
+  SafeHttpClient,
+  type HttpFailureKind,
+  type HttpResult,
+  type SafeHttpClientOptions,
+} from './safe-http-client.js';
+export {
   RetryPolicy,
   type RetryDecision,
   type RetryPolicyOptions,
