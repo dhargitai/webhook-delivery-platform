@@ -197,6 +197,36 @@ describe('DeliveryAttempt', () => {
       kind: 'delivered',
       status: 204,
       latencyMs: 31,
+      snippet: '',
+    });
+  });
+
+  it('carries the response snippet of a delivered attempt', async () => {
+    client.result = {
+      outcome: 'success',
+      status: 200,
+      latencyMs: 4,
+      snippet: 'received',
+    };
+
+    expect(await delivery.attempt(job)).toMatchObject({
+      kind: 'delivered',
+      snippet: 'received',
+    });
+  });
+
+  it('carries the response snippet of a failed attempt', async () => {
+    client.result = {
+      outcome: 'failed',
+      kind: 'http_error',
+      status: 503,
+      latencyMs: 9,
+      snippet: 'overloaded',
+    };
+
+    expect(await delivery.attempt(job)).toMatchObject({
+      kind: 'failed',
+      snippet: 'overloaded',
     });
   });
 

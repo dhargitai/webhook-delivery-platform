@@ -6,7 +6,12 @@ import { JobMessageHandler } from './job-message-handler.js';
 
 class FakeAttempt {
   readonly jobs: DeliveryJob[] = [];
-  outcome: AttemptOutcome = { kind: 'delivered', status: 200, latencyMs: 5 };
+  outcome: AttemptOutcome = {
+    kind: 'delivered',
+    status: 200,
+    latencyMs: 5,
+    snippet: 'ok',
+  };
   failWith?: Error;
   /** When set, `attempt` stays pending until this is called. */
   release?: () => void;
@@ -57,12 +62,12 @@ describe('JobMessageHandler', () => {
 
     expect(result).toEqual({
       job: valid,
-      outcome: { kind: 'delivered', status: 200, latencyMs: 5 },
+      outcome: { kind: 'delivered', status: 200, latencyMs: 5, snippet: 'ok' },
     });
   });
 
   it.each<AttemptOutcome>([
-    { kind: 'delivered', status: 204, latencyMs: 3 },
+    { kind: 'delivered', status: 204, latencyMs: 3, snippet: '' },
     { kind: 'failed', failure: 'timeout', latencyMs: 10_000 },
     { kind: 'skipped', reason: 'endpoint_missing' },
     { kind: 'skipped', reason: 'endpoint_disabled' },

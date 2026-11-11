@@ -78,6 +78,11 @@ export {
   PartialDispatchError,
 } from './dispatch/dispatcher.js';
 export {
+  AttemptLog,
+  type AttemptRecord,
+  toAttemptRecord,
+} from './delivery/attempt-log.js';
+export {
   type AttemptOutcome,
   DeliveryAttempt,
   type DeliveryAttemptDeps,
