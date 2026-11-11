@@ -29,3 +29,17 @@ export {
   type IngestRequest,
   type IngestResult,
 } from './idempotent-ingest.js';
+export { EventPublisher } from './outbox/event-publisher.js';
+export { KyselyOutboxStore } from './outbox/kysely-outbox-store.js';
+export {
+  type OutboxBatch,
+  type OutboxEvent,
+  OutboxStore,
+} from './outbox/outbox-store.js';
+export {
+  OutboxRelay,
+  type OutboxRelayOptions,
+  PartialPublishError,
+  type PublishFailure,
+} from './outbox/outbox-relay.js';
+export { RelayLoop, type RelayLoopOptions } from './outbox/relay-loop.js';

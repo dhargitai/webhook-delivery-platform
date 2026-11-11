@@ -44,6 +44,24 @@
         "zod": "^4.6.7",
       },
     },
+    "apps/relay": {
+      "name": "@wdp/relay",
+      "version": "0.0.1",
+      "dependencies": {
+        "@nestjs/common": "^12.0.1",
+        "@nestjs/config": "^12.1.1",
+        "@nestjs/core": "^12.0.1",
+        "@wdp/core": "workspace:*",
+        "@wdp/messaging": "workspace:*",
+        "kysely": "^0.29.8",
+        "reflect-metadata": "^0.2.2",
+        "rxjs": "^7.8.1",
+        "zod": "^4.6.7",
+      },
+      "devDependencies": {
+        "amqplib": "^2.3.1",
+      },
+    },
     "libs/core": {
       "name": "@wdp/core",
       "version": "0.0.1",
@@ -358,6 +376,8 @@
     "@wdp/messaging": ["@wdp/messaging@workspace:libs/messaging"],
 
     "@wdp/observability": ["@wdp/observability@workspace:libs/observability"],
+
+    "@wdp/relay": ["@wdp/relay@workspace:apps/relay"],
 
     "abort-controller": ["abort-controller@3.0.0", "", { "dependencies": { "event-target-shim": "^5.0.0" } }, "sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg=="],
 

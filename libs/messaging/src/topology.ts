@@ -30,10 +30,56 @@ export interface TopologyOptions {
   namespace?: string;
 }
 
+/** Where a service that only needs the events side declares from. */
+export interface EventTopologyOptions {
+  namespace?: string;
+}
+
+/** Declares the dead-letter exchange and queue every working queue falls back to. */
+async function declareDeadLetters(channel: Channel, names: TopologyNames) {
+  // Dead letters from every queue land in one place for inspection and replay.
+  await channel.assertExchange(names.deadLetterExchange, 'fanout', {
+    durable: true,
+  });
+  await channel.assertQueue(names.deadLetterQueue, {
+    durable: true,
+    arguments: { 'x-queue-type': 'quorum' },
+  });
+  await channel.bindQueue(names.deadLetterQueue, names.deadLetterExchange, '');
+}
+
 /**
- * Declares the exchanges, queues and bindings. Idempotent, so every service
- * can call it at startup. RabbitMQ refuses to redeclare a queue with different
- * arguments, which turns a drifting config into a loud failure.
+ * Declares the events side: the events exchange, the dispatch queue and the
+ * dead-letter queue. Idempotent. The relay needs only this, so it does not
+ * have to know the lane count.
+ */
+export async function declareEventTopology(
+  channel: Channel,
+  { namespace }: EventTopologyOptions = {},
+): Promise<TopologyNames> {
+  const names = topologyNames(namespace);
+  await declareDeadLetters(channel, names);
+
+  await channel.assertExchange(names.eventsExchange, 'direct', {
+    durable: true,
+  });
+  await channel.assertQueue(names.dispatchQueue, {
+    durable: true,
+    arguments: quorumQueueArguments(names.deadLetterExchange),
+  });
+  await channel.bindQueue(
+    names.dispatchQueue,
+    names.eventsExchange,
+    EVENT_PUBLISHED_ROUTING_KEY,
+  );
+  return names;
+}
+
+/**
+ * Declares everything: the events side plus the deliveries exchange and its
+ * lane queues. Idempotent, so every service can call it at startup. RabbitMQ
+ * refuses to redeclare a queue with different arguments, which turns a
+ * drifting config into a loud failure.
  */
 export async function declareTopology(
   channel: Channel,
@@ -44,44 +90,22 @@ export async function declareTopology(
       `laneCount must be a positive integer, got ${laneCount}`,
     );
   }
-  const names = topologyNames(namespace);
-  const workingQueue = {
-    durable: true,
-    arguments: quorumQueueArguments(names.deadLetterExchange),
-  };
-
-  // Dead letters from every queue land in one place for inspection and replay.
-  await channel.assertExchange(names.deadLetterExchange, 'fanout', {
-    durable: true,
-  });
-  await channel.assertQueue(names.deadLetterQueue, {
-    durable: true,
-    arguments: { 'x-queue-type': 'quorum' },
-  });
-  await channel.bindQueue(names.deadLetterQueue, names.deadLetterExchange, '');
-
-  await channel.assertExchange(names.eventsExchange, 'direct', {
-    durable: true,
-  });
-  await channel.assertQueue(names.dispatchQueue, workingQueue);
-  await channel.bindQueue(
-    names.dispatchQueue,
-    names.eventsExchange,
-    EVENT_PUBLISHED_ROUTING_KEY,
-  );
+  const names = await declareEventTopology(channel, { namespace });
 
   await channel.assertExchange(names.deliveriesExchange, 'direct', {
     durable: true,
   });
   for (let lane = 0; lane < laneCount; lane++) {
     const queue = names.laneQueue(lane);
-    await channel.assertQueue(queue, workingQueue);
+    await channel.assertQueue(queue, {
+      durable: true,
+      arguments: quorumQueueArguments(names.deadLetterExchange),
+    });
     await channel.bindQueue(
       queue,
       names.deliveriesExchange,
       laneRoutingKey(lane),
     );
   }
-
   return names;
 }

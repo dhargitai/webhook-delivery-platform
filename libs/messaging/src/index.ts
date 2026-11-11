@@ -28,8 +28,10 @@ export {
   type TopologyNames,
 } from './names.js';
 export {
+  declareEventTopology,
   declareTopology,
   DELIVERY_LIMIT,
   quorumQueueArguments,
+  type EventTopologyOptions,
   type TopologyOptions,
 } from './topology.js';

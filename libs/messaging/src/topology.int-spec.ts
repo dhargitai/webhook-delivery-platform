@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { BrokerConnection } from './connection.js';
 import { EVENT_PUBLISHED_ROUTING_KEY } from './names.js';
 import { testingNamespace } from './testing/helpers.js';
-import { declareTopology } from './topology.js';
+import { declareEventTopology, declareTopology } from './topology.js';
 
 describe('declareTopology (real RabbitMQ)', () => {
   let conn: BrokerConnection;
@@ -109,6 +109,35 @@ describe('declareTopology (real RabbitMQ)', () => {
     expect(await take(names.laneQueue(0))).toBeNull();
     expect(await take(names.laneQueue(2))).toBeNull();
     expect(await take(names.laneQueue(1))).toBe('job');
+  });
+
+  it('declares only the events side when asked to, so a service need not know the lane count', async () => {
+    const namespace = testingNamespace();
+    const channel = await conn.createChannel();
+
+    const names = await declareEventTopology(channel, { namespace });
+
+    const probe = await conn.createChannel();
+    await expect(probe.checkQueue(names.dispatchQueue)).resolves.toBeDefined();
+    const dlq = await conn.createChannel();
+    await expect(dlq.checkQueue(names.deadLetterQueue)).resolves.toBeDefined();
+    const lane = await conn.createChannel();
+    await expect(lane.checkQueue(names.laneQueue(0))).rejects.toThrow(
+      /NOT_FOUND/,
+    );
+  });
+
+  it('is compatible with the full declaration made before or after it', async () => {
+    const namespace = testingNamespace();
+    const channel = await conn.createChannel();
+
+    await declareEventTopology(channel, { namespace });
+    await expect(
+      declareTopology(channel, { laneCount: 2, namespace }),
+    ).resolves.toBeDefined();
+    await expect(
+      declareEventTopology(channel, { namespace }),
+    ).resolves.toBeDefined();
   });
 
   it('declares exactly one queue per lane', async () => {
