@@ -32,6 +32,12 @@ export interface SafeHttpClientOptions {
    * guard has to look at those here. IPv6 hosts come without their brackets.
    */
   hostCheck?: (hostname: string) => string | undefined;
+  /**
+   * An extra root certificate to trust for https, on top of the system's. It
+   * adds trust and nothing else: the certificate chain and the host name are
+   * still verified. For a private CA, and for tests with a self-signed one.
+   */
+  ca?: string | Buffer;
 }
 
 export type HttpFailureKind =
@@ -68,6 +74,7 @@ export class SafeHttpClient {
   private readonly lookup: LookupFunction | undefined;
   private readonly hostCheck:
     ((hostname: string) => string | undefined) | undefined;
+  private readonly ca: string | Buffer | undefined;
 
   constructor({
     snippetBytes = DEFAULT_SNIPPET_BYTES,
@@ -76,6 +83,7 @@ export class SafeHttpClient {
     totalTimeoutMs = DEFAULT_TOTAL_TIMEOUT_MS,
     lookup,
     hostCheck,
+    ca,
   }: SafeHttpClientOptions = {}) {
     requirePositiveInteger('snippetBytes', snippetBytes);
     requirePositiveInteger('maxResponseBytes', maxResponseBytes);
@@ -93,6 +101,7 @@ export class SafeHttpClient {
     this.totalTimeoutMs = totalTimeoutMs;
     this.lookup = lookup;
     this.hostCheck = hostCheck;
+    this.ca = ca;
   }
 
   post(
@@ -146,6 +155,8 @@ export class SafeHttpClient {
           // is decided when connecting (the SSRF guard pins the IP there).
           agent: false,
           lookup: this.lookup,
+          // Only https looks at it; http ignores the option.
+          ca: this.ca,
         },
         (res) => {
           const status = res.statusCode ?? 0;
