@@ -78,6 +78,11 @@ export {
   PartialDispatchError,
 } from './dispatch/dispatcher.js';
 export {
+  type AttemptOutcome,
+  DeliveryAttempt,
+  type DeliveryAttemptDeps,
+} from './delivery/delivery-attempt.js';
+export {
   type EndpointTarget,
   EndpointTargetLookup,
 } from './delivery/endpoint-target-lookup.js';
