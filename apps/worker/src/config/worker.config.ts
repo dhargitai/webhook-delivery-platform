@@ -12,6 +12,9 @@ export const workerConfig = registerAs('worker', () => {
     brokerNamespace: env.BROKER_NAMESPACE,
     laneCount: env.LANE_COUNT,
     prefetch: env.WORKER_PREFETCH,
+    retryPrefetch: env.WORKER_RETRY_PREFETCH,
+    timeScale: env.TIME_SCALE,
+    retryMinDelayMs: env.RETRY_MIN_DELAY_MS,
     ssrfAllowHosts: env.SSRF_ALLOW_HOSTS,
   };
 });

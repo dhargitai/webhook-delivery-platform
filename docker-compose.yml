@@ -140,6 +140,10 @@ services:
       # mock receiver, a private address. Keep it the same as the API's.
       SSRF_ALLOW_HOSTS: mock-receiver
       MONGO_URL: mongodb://mongo:27017
+      # Compress the retry schedule for a demo, e.g.
+      #   TIME_SCALE=30 RETRY_MIN_DELAY_MS=500 docker compose up
+      TIME_SCALE: ${TIME_SCALE:-1}
+      RETRY_MIN_DELAY_MS: ${RETRY_MIN_DELAY_MS:-0}
     ports:
       - '3001:3001'
     depends_on:

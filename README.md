@@ -233,12 +233,15 @@ The API validates these at boot and refuses to start if one is invalid or a requ
 
 The worker reads `DATABASE_URL`, `RABBITMQ_URL`, `BROKER_NAMESPACE`, `LANE_COUNT` (it must match the dispatcher's) and `SSRF_ALLOW_HOSTS` as above, plus:
 
-| Variable          | Default  | Purpose                                      |
-| ----------------- | -------- | -------------------------------------------- |
-| `PORT`            | `3001`   | HTTP port of `GET /status`                   |
-| `WORKER_PREFETCH` | `20`     | Jobs handled at once per lane queue          |
-| `MONGO_URL`       | required | MongoDB connection string of the attempt log |
-| `MONGO_DB`        | `wdp`    | Database of the `attempts` collection        |
+| Variable                | Default  | Purpose                                                                                                                                    |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PORT`                  | `3001`   | HTTP port of `GET /status`                                                                                                                 |
+| `WORKER_PREFETCH`       | `20`     | Jobs handled at once per lane queue                                                                                                        |
+| `WORKER_RETRY_PREFETCH` | `5`      | Retries handled at once, from the shared `retry.ready` queue                                                                               |
+| `TIME_SCALE`            | `1`      | Divides every retry delay: 1 in production, 30 for a demo, 1000 in tests. Part of the retry queues' names, so a new value makes new queues |
+| `RETRY_MIN_DELAY_MS`    | `0`      | No retry delay is shorter than this, however large the scale (demo 500, tests 20)                                                          |
+| `MONGO_URL`             | required | MongoDB connection string of the attempt log                                                                                               |
+| `MONGO_DB`              | `wdp`    | Database of the `attempts` collection                                                                                                      |
 
 The relay reads `DATABASE_URL` too, plus:
 
@@ -263,10 +266,9 @@ The dispatcher reads `DATABASE_URL`, `RABBITMQ_URL` and `BROKER_NAMESPACE` too, 
 
 The PRD locks further parameters, which become environment variables as each feature lands:
 
-| Variable         | Planned default               | Purpose                                                      |
-| ---------------- | ----------------------------- | ------------------------------------------------------------ |
-| `TIME_SCALE`     | `1` (demo `30`, tests `1000`) | Divides every retry delay                                    |
-| `SECRETS_KEK_V1` | none                          | Base64 32-byte key that wraps endpoint secrets (AES-256-GCM) |
+| Variable         | Planned default | Purpose                                                      |
+| ---------------- | --------------- | ------------------------------------------------------------ |
+| `SECRETS_KEK_V1` | none            | Base64 32-byte key that wraps endpoint secrets (AES-256-GCM) |
 
 See [`docs/PRD-v1.3.md`](docs/PRD-v1.3.md), section 6, "Locked parameters", for the full list of values.
 

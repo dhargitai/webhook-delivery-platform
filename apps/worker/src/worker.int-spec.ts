@@ -7,6 +7,7 @@ import {
   type Database,
   type DeliveryJob,
   generateEndpointSecret,
+  RetryPolicy,
   SignatureService,
 } from '@wdp/core';
 import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
@@ -14,6 +15,7 @@ import { laneRoutingKey } from '@wdp/domain';
 import {
   BrokerConnection,
   ConfirmPublisher,
+  declareRetryTopology,
   declareTopology,
   encodeMessage,
   topologyNames,
@@ -39,6 +41,11 @@ interface Received {
   body: string;
 }
 
+// The PRD's test settings: every retry delay divided by 1000, none below 20 ms.
+// The first tier is then 20 ms, the fourth about 1.8 s.
+const TIME_SCALE = 1000;
+const RETRY_MIN_DELAY_MS = 20;
+
 describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
   const namespace = testingNamespace();
   const names: TopologyNames = topologyNames(namespace);
@@ -56,7 +63,12 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
   let receiverServer: Server;
   let receiverPort: number;
   let receiverUrl: string;
+  // What `/hook` and `/flaky` got.
   const received: Received[] = [];
+  // What `/always-fail` got. Kept apart: a job that always fails keeps coming
+  // back for as long as the worker runs, and must not leak into `received`.
+  const rejected: Received[] = [];
+  const flakyHits = new Map<string, number>();
   let receiverStatus = 200;
 
   beforeAll(async () => {
@@ -80,11 +92,26 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => {
-        received.push({
+        const request = {
           headers: req.headers,
           body: Buffer.concat(chunks).toString(),
-        });
-        res.statusCode = receiverStatus;
+        };
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        if (url.pathname === '/always-fail') {
+          rejected.push(request);
+          res.statusCode = 503;
+        } else if (url.pathname === '/flaky') {
+          // Fails the first `failFirst` requests of each webhook id, then recovers.
+          const id = String(req.headers['webhook-id']);
+          const hits = (flakyHits.get(id) ?? 0) + 1;
+          flakyHits.set(id, hits);
+          received.push(request);
+          res.statusCode =
+            hits <= Number(url.searchParams.get('failFirst')) ? 503 : 200;
+        } else {
+          received.push(request);
+          res.statusCode = receiverStatus;
+        }
         res.end('ok');
       });
     });
@@ -103,6 +130,8 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
+    process.env.TIME_SCALE = String(TIME_SCALE);
+    process.env.RETRY_MIN_DELAY_MS = String(RETRY_MIN_DELAY_MS);
     const { WorkerModule } = await import('./worker.module.js');
     worker = await Test.createTestingModule({
       imports: [WorkerModule],
@@ -123,6 +152,7 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
 
   beforeEach(async () => {
     received.length = 0;
+    rejected.length = 0;
     receiverStatus = 200;
     await drain(names.deadLetterQueue);
   });
@@ -278,17 +308,135 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     ).toBe(true);
   });
 
-  it('acks a job whose receiver fails, without redelivering or dead-lettering it', async () => {
-    const tenantId = await createTenant();
-    const { id } = await addEndpoint(tenantId);
-    receiverStatus = 503;
+  describe('retries', () => {
+    const attemptsOf = (deliveryId: string) =>
+      attempts
+        .find({ delivery_id: deliveryId }, { projection: { _id: 0 } })
+        .sort({ attempt_no: 1 })
+        .toArray();
 
-    await publishJob(jobFor(tenantId, id));
+    it('delivers on a later attempt when the receiver recovers, and stops there', async () => {
+      const tenantId = await createTenant();
+      const { id, secret } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/flaky?failFirst=4`,
+      });
+      const job = jobFor(tenantId, id);
 
-    await eventually(() => expect(received).toHaveLength(1));
-    await untilAcked();
-    expect(received).toHaveLength(1);
-    expect(await count(names.deadLetterQueue)).toBe(0);
+      await publishJob(job);
+
+      await eventually(() => expect(received).toHaveLength(5), {
+        timeoutMs: 20_000,
+      });
+      await untilAcked();
+      expect(received).toHaveLength(5);
+      expect(await count(names.deadLetterQueue)).toBe(0);
+      expect(await count(names.retryReadyQueue)).toBe(0);
+
+      // One webhook id throughout, a timestamp taken afresh on every attempt,
+      // and a signature that verifies each time.
+      const timestamps = received.map((r) =>
+        Number(r.headers['webhook-timestamp']),
+      );
+      for (const request of received) {
+        expect(request.headers['webhook-id']).toBe(job.deliveryId);
+        expect(
+          signatures.verify(
+            String(request.headers['webhook-signature']),
+            String(request.headers['webhook-id']),
+            Number(request.headers['webhook-timestamp']),
+            request.body,
+            [secret],
+            new Date(),
+          ),
+        ).toBe(true);
+      }
+      expect(timestamps).toEqual([...timestamps].sort((a, b) => a - b));
+      expect(timestamps[4]).toBeGreaterThan(timestamps[0] ?? Infinity);
+    });
+
+    it('logs every attempt under its own number, failures first and the success last', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/flaky?failFirst=4`,
+      });
+      const job = jobFor(tenantId, id);
+
+      await publishJob(job);
+      await eventually(() => expect(received).toHaveLength(5), {
+        timeoutMs: 20_000,
+      });
+      await untilAcked();
+
+      const docs = await attemptsOf(job.deliveryId);
+      expect(docs.map((d) => [d['attempt_no'], d['status']])).toEqual([
+        [1, 'failure'],
+        [2, 'failure'],
+        [3, 'failure'],
+        [4, 'failure'],
+        [5, 'success'],
+      ]);
+    });
+
+    it('waits longer after each failure, following the schedule', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/flaky?failFirst=4`,
+      });
+      const job = jobFor(tenantId, id);
+
+      await publishJob(job);
+      await eventually(() => expect(received).toHaveLength(5), {
+        timeoutMs: 20_000,
+      });
+      await untilAcked();
+
+      const ts = (await attemptsOf(job.deliveryId)).map((d) =>
+        (d['ts'] as Date).getTime(),
+      );
+      const gaps = ts.slice(1).map((t, i) => t - (ts[i] ?? 0));
+      // Tiers 3 and 4 at their shortest jitter bucket (0.8x): 240 ms, 1440 ms.
+      // A retry that ignored the attempt number would come back after 20 ms.
+      expect(gaps[2]).toBeGreaterThanOrEqual(200);
+      expect(gaps[3]).toBeGreaterThanOrEqual(1_400);
+    });
+
+    it('keeps the job when the retry cannot be published, so it is never lost', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/always-fail`,
+      });
+      const job = jobFor(tenantId, id);
+      const policy = new RetryPolicy({
+        timeScale: TIME_SCALE,
+        minDelayMs: RETRY_MIN_DELAY_MS,
+      });
+      const hits = () =>
+        rejected.filter((r) => r.headers['webhook-id'] === job.deliveryId);
+
+      // Without its tier queue the retry is unroutable. The worker must not ack
+      // the job: it comes back, and the receiver is called again.
+      const channel = await conn.createChannel();
+      await channel.deleteQueue(names.retryTierQueue(RETRY_MIN_DELAY_MS));
+      await publishJob(job);
+      await eventually(() => expect(hits().length).toBeGreaterThanOrEqual(2));
+
+      // The queue is back: the retry goes through, as attempt 2.
+      await declareRetryTopology(channel, {
+        laneCount: LANES,
+        retryDelaysMs: policy.delays(),
+        parkDelayMs: policy.parkDelayMs,
+        namespace,
+      });
+      await channel.close();
+      await eventually(async () => {
+        expect(
+          await attempts.countDocuments({
+            delivery_id: job.deliveryId,
+            attempt_no: 2,
+          }),
+        ).toBeGreaterThan(0);
+      });
+    });
   });
 
   // The receiver answers on loopback, so a request that gets through shows up
@@ -374,6 +522,7 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     const logged = (deliveryId: string) =>
       attempts
         .find({ delivery_id: deliveryId }, { projection: { _id: 0 } })
+        .sort({ attempt_no: 1 })
         .toArray();
 
     it('records a delivered attempt with the PRD fields', async () => {
@@ -405,21 +554,23 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
 
     it('records a failed attempt as a failure with the HTTP status and the error kind', async () => {
       const tenantId = await createTenant();
-      const { id } = await addEndpoint(tenantId);
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/always-fail`,
+      });
       const job = jobFor(tenantId, id);
-      receiverStatus = 503;
 
       await publishJob(job);
       await untilAcked();
 
-      expect(await logged(job.deliveryId)).toEqual([
-        expect.objectContaining({
-          status: 'failure',
-          http_status: 503,
-          error: 'http_error',
-          response_snippet: 'ok',
-        }),
-      ]);
+      // The job is retried, so the log may hold later attempts too.
+      const [first] = await logged(job.deliveryId);
+      expect(first).toMatchObject({
+        attempt_no: 1,
+        status: 'failure',
+        http_status: 503,
+        error: 'http_error',
+        response_snippet: 'ok',
+      });
     });
 
     it('records a refused connection as a failure with no HTTP status', async () => {
