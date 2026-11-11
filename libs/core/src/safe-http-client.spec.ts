@@ -442,6 +442,41 @@ describe('SafeHttpClient.post', () => {
     });
   });
 
+  describe('an unusable URL', () => {
+    it.each([
+      '',
+      'not a url',
+      '/relative/path',
+      'ftp://example.com/x',
+      'file:///etc/passwd',
+      'javascript:alert(1)',
+    ])('is a failed result, not a throw: %j', async (url) => {
+      const result = await client.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ outcome: 'failed', kind: 'invalid_url' });
+      expect(result.outcome === 'failed' && result.error).toMatch(/\S/);
+    });
+
+    it('accepts an https URL', async () => {
+      // Nothing listens on port 1, so this ends as a refused connection: the
+      // URL itself was usable.
+      const result = await client.post('https://127.0.0.1:1/hook', {}, '{}');
+
+      expect(result).toMatchObject({ kind: 'network_error' });
+    });
+
+    it('starts no timer', async () => {
+      const timers = () =>
+        process.getActiveResourcesInfo().filter((name) => name === 'Timeout')
+          .length;
+      const before = timers();
+
+      await client.post('not a url', {}, '{}');
+
+      expect(timers()).toBeLessThanOrEqual(before);
+    });
+  });
+
   it('reports a refused connection as a network error', async () => {
     const { url } = await listen(answer(200));
     // Closing the only listener leaves a port nothing answers on.

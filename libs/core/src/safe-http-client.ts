@@ -33,7 +33,8 @@ export type HttpFailureKind =
   | 'response_too_large'
   | 'connect_timeout'
   | 'timeout'
-  | 'network_error';
+  | 'network_error'
+  | 'invalid_url';
 
 export type HttpResult =
   | { outcome: 'success'; status: number; latencyMs: number; snippet: string }
@@ -90,7 +91,17 @@ export class SafeHttpClient {
     const startedAt = performance.now();
     const latency = () => Math.round(performance.now() - startedAt);
     const payload = typeof body === 'string' ? Buffer.from(body, 'utf8') : body;
-    const target = new URL(url);
+    // Registration already refuses such URLs; a bad stored value must still be
+    // a failed attempt, not an exception out of the worker's consumer.
+    const target = URL.parse(url);
+    if (target?.protocol !== 'http:' && target?.protocol !== 'https:') {
+      return Promise.resolve({
+        outcome: 'failed',
+        kind: 'invalid_url',
+        latencyMs: latency(),
+        error: 'the URL must be an absolute http or https URL',
+      });
+    }
     const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
 
     return new Promise<HttpResult>((resolvePromise) => {
