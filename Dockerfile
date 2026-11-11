@@ -24,6 +24,7 @@ COPY apps/relay/package.json apps/relay/
 COPY apps/dispatcher/package.json apps/dispatcher/
 COPY apps/mock-receiver/package.json apps/mock-receiver/
 COPY apps/ops/package.json apps/ops/
+COPY apps/worker/package.json apps/worker/
 RUN bun install --frozen-lockfile
 
 COPY tsconfig.base.json tsconfig.json ./
