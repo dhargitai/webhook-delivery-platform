@@ -38,6 +38,7 @@ export {
   type SafeHttpClientOptions,
 } from './safe-http-client.js';
 export {
+  MAX_ATTEMPTS,
   RetryPolicy,
   type RetryDecision,
   type RetryPolicyOptions,
