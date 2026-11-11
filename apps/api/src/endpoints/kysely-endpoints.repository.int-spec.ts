@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { createDatabase, type Database } from '@wdp/core';
+import {
+  createDatabase,
+  type Database,
+  generateEndpointSecret,
+} from '@wdp/core';
 import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
 import type { Kysely } from 'kysely';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
@@ -36,10 +40,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
   it('stores an endpoint and reads it back', async () => {
     const tenantId = await createTenant();
 
-    const created = await repo.create(tenantId, {
-      url: 'https://hooks.acme.test/in',
-      description: 'billing',
-    });
+    const created = await repo.create(
+      tenantId,
+      { url: 'https://hooks.acme.test/in', description: 'billing' },
+      generateEndpointSecret(),
+    );
     const found = await repo.find(tenantId, created.id);
 
     expect(found).toEqual(created);
@@ -52,11 +57,44 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
     expect(created.createdAt).toBeInstanceOf(Date);
   });
 
+  describe('signing secret', () => {
+    it('stores the secret it is given', async () => {
+      const tenantId = await createTenant();
+      const secret = generateEndpointSecret();
+
+      const endpoint = await repo.create(tenantId, input, secret);
+
+      const row = await db
+        .selectFrom('endpoints')
+        .select('signing_secret')
+        .where('id', '=', endpoint.id)
+        .executeTakeFirstOrThrow();
+      expect(row.signing_secret).toBe(secret);
+    });
+
+    it('never returns the secret when reading', async () => {
+      const tenantId = await createTenant();
+      const secret = generateEndpointSecret();
+      const created = await repo.create(tenantId, input, secret);
+
+      const found = await repo.find(tenantId, created.id);
+      const listed = await repo.list(tenantId);
+
+      for (const endpoint of [created, found, ...listed]) {
+        expect(JSON.stringify(endpoint)).not.toContain(secret);
+      }
+    });
+  });
+
   describe('tenant scoping', () => {
     it('hides an endpoint from every other tenant', async () => {
       const owner = await createTenant();
       const other = await createTenant();
-      const endpoint = await repo.create(owner, input);
+      const endpoint = await repo.create(
+        owner,
+        input,
+        generateEndpointSecret(),
+      );
 
       expect(await repo.find(other, endpoint.id)).toBeNull();
       expect(await repo.list(other)).toEqual([]);
@@ -66,7 +104,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
     it("refuses to delete or change another tenant's endpoint", async () => {
       const owner = await createTenant();
       const other = await createTenant();
-      const endpoint = await repo.create(owner, input);
+      const endpoint = await repo.create(
+        owner,
+        input,
+        generateEndpointSecret(),
+      );
       await repo.replaceSubscriptions(owner, endpoint.id, ['invoice.paid']);
 
       expect(await repo.delete(other, endpoint.id)).toBe(false);
@@ -82,9 +124,21 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
     it('lists a tenant’s endpoints in creation order', async () => {
       const tenantId = await createTenant();
-      const first = await repo.create(tenantId, input);
-      const second = await repo.create(tenantId, input);
-      const third = await repo.create(tenantId, input);
+      const first = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
+      const second = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
+      const third = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
 
       const listed = await repo.list(tenantId);
 
@@ -95,7 +149,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
   describe('delete', () => {
     it('removes the endpoint and its subscriptions', async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
 
       expect(await repo.delete(tenantId, endpoint.id)).toBe(true);
@@ -119,7 +177,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
   describe('replaceSubscriptions', () => {
     it('replaces the previous set and lists it sorted', async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
 
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['d', 'c']);
@@ -132,7 +194,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
     it('is idempotent', async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
 
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
@@ -145,7 +211,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
     it('clears the set when given an empty list', async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a']);
 
       await repo.replaceSubscriptions(tenantId, endpoint.id, []);
@@ -155,7 +225,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
     it("stamps every subscription with the endpoint's tenant", async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
 
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
 
@@ -169,7 +243,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
     it('leaves the old set untouched when the new one cannot be stored', async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
       await repo.replaceSubscriptions(tenantId, endpoint.id, [
         'keep-1',
         'keep-2',
@@ -189,7 +267,11 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
     it('survives concurrent replaces of the same endpoint', async () => {
       const tenantId = await createTenant();
-      const endpoint = await repo.create(tenantId, input);
+      const endpoint = await repo.create(
+        tenantId,
+        input,
+        generateEndpointSecret(),
+      );
 
       const results = await Promise.allSettled(
         Array.from({ length: 10 }, () =>

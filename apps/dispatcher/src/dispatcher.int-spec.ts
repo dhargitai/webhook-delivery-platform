@@ -5,6 +5,7 @@ import {
   type DeliveryJob,
   DeliveryPublisher,
   Dispatcher,
+  generateEndpointSecret,
   KyselySubscriptionLookup,
   LaneRouter,
 } from '@wdp/core';
@@ -106,7 +107,11 @@ describe('dispatcher (real Postgres and RabbitMQ)', () => {
   ): Promise<string> {
     const endpoint = await db
       .insertInto('endpoints')
-      .values({ tenant_id: tenantId, url: 'https://hooks.acme.test/in' })
+      .values({
+        tenant_id: tenantId,
+        url: 'https://hooks.acme.test/in',
+        signing_secret: generateEndpointSecret(),
+      })
       .returning('id')
       .executeTakeFirstOrThrow();
     await db

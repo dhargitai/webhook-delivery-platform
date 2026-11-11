@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { generateEndpointSecret } from '@wdp/core';
 import { EndpointNotFoundError } from '@wdp/domain';
 import {
   type Endpoint,
@@ -6,12 +7,20 @@ import {
   type NewEndpoint,
 } from './endpoints.repository.js';
 
+/** A new endpoint with its signing secret, which exists in the clear only here. */
+export interface CreatedEndpoint {
+  endpoint: Endpoint;
+  secret: string;
+}
+
 @Injectable()
 export class EndpointsService {
   constructor(private readonly endpoints: EndpointsRepository) {}
 
-  create(tenantId: string, input: NewEndpoint): Promise<Endpoint> {
-    return this.endpoints.create(tenantId, input);
+  async create(tenantId: string, input: NewEndpoint): Promise<CreatedEndpoint> {
+    const secret = generateEndpointSecret();
+    const endpoint = await this.endpoints.create(tenantId, input, secret);
+    return { endpoint, secret };
   }
 
   list(tenantId: string): Promise<Endpoint[]> {

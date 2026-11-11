@@ -11,9 +11,15 @@ import { EndpointsService } from './endpoints.service.js';
 class FakeEndpointsRepository extends EndpointsRepository {
   readonly endpoints = new Map<string, Endpoint>();
   readonly subscriptions = new Map<string, string[]>();
+  /** What the service handed over, by endpoint id. Never part of an `Endpoint`. */
+  readonly secrets = new Map<string, string>();
   private counter = 0;
 
-  async create(tenantId: string, input: NewEndpoint): Promise<Endpoint> {
+  async create(
+    tenantId: string,
+    input: NewEndpoint,
+    signingSecret: string,
+  ): Promise<Endpoint> {
     this.counter += 1;
     const endpoint: Endpoint = {
       id: `ep-${this.counter}`,
@@ -24,6 +30,7 @@ class FakeEndpointsRepository extends EndpointsRepository {
       createdAt: new Date(2026, 0, this.counter),
     };
     this.endpoints.set(endpoint.id, endpoint);
+    this.secrets.set(endpoint.id, signingSecret);
     return endpoint;
   }
 
@@ -72,9 +79,11 @@ describe('EndpointsService', () => {
   });
 
   const input = { url: 'https://hooks.acme.test/in', description: null };
+  const create = async (tenantId: string) =>
+    (await service.create(tenantId, input)).endpoint;
 
   it('creates an active endpoint owned by the tenant', async () => {
-    const endpoint = await service.create('tenant-a', input);
+    const { endpoint } = await service.create('tenant-a', input);
 
     expect(endpoint).toMatchObject({
       tenantId: 'tenant-a',
@@ -84,9 +93,34 @@ describe('EndpointsService', () => {
     });
   });
 
+  describe('signing secret', () => {
+    it('hands out the secret it stored for the endpoint', async () => {
+      const { endpoint, secret } = await service.create('tenant-a', input);
+
+      expect(secret).toMatch(/^whsec_[A-Za-z0-9+/]{43}=$/);
+      expect(repo.secrets.get(endpoint.id)).toBe(secret);
+    });
+
+    it('gives every endpoint its own secret', async () => {
+      const first = await service.create('tenant-a', input);
+      const second = await service.create('tenant-a', input);
+
+      expect(first.secret).not.toBe(second.secret);
+    });
+
+    it('never exposes the secret when reading', async () => {
+      const { endpoint, secret } = await service.create('tenant-a', input);
+
+      const found = await service.get('tenant-a', endpoint.id);
+      const listed = await service.list('tenant-a');
+
+      expect(JSON.stringify([found, listed])).not.toContain(secret);
+    });
+  });
+
   it("lists only the tenant's own endpoints", async () => {
-    const mine = await service.create('tenant-a', input);
-    await service.create('tenant-b', input);
+    const mine = await create('tenant-a');
+    await create('tenant-b');
 
     expect(await service.list('tenant-a')).toEqual([mine]);
   });
@@ -114,7 +148,7 @@ describe('EndpointsService', () => {
     ])(
       '$name throws not found and leaves the endpoint alone',
       async ({ act }) => {
-        const owned = await service.create('tenant-a', input);
+        const owned = await create('tenant-a');
         await service.replaceSubscriptions('tenant-a', owned.id, [
           'invoice.paid',
         ]);
@@ -138,7 +172,7 @@ describe('EndpointsService', () => {
   });
 
   it('deletes an endpoint together with its subscriptions', async () => {
-    const endpoint = await service.create('tenant-a', input);
+    const endpoint = await create('tenant-a');
     await service.replaceSubscriptions('tenant-a', endpoint.id, ['x']);
 
     await service.delete('tenant-a', endpoint.id);
@@ -151,7 +185,7 @@ describe('EndpointsService', () => {
 
   describe('replaceSubscriptions', () => {
     it('stores each event type once, sorted', async () => {
-      const endpoint = await service.create('tenant-a', input);
+      const endpoint = await create('tenant-a');
 
       const result = await service.replaceSubscriptions(
         'tenant-a',
@@ -167,7 +201,7 @@ describe('EndpointsService', () => {
     });
 
     it('replaces the previous set instead of adding to it', async () => {
-      const endpoint = await service.create('tenant-a', input);
+      const endpoint = await create('tenant-a');
       await service.replaceSubscriptions('tenant-a', endpoint.id, ['a', 'b']);
 
       await service.replaceSubscriptions('tenant-a', endpoint.id, ['c']);
@@ -178,7 +212,7 @@ describe('EndpointsService', () => {
     });
 
     it('clears every subscription when given an empty list', async () => {
-      const endpoint = await service.create('tenant-a', input);
+      const endpoint = await create('tenant-a');
       await service.replaceSubscriptions('tenant-a', endpoint.id, ['a']);
 
       await service.replaceSubscriptions('tenant-a', endpoint.id, []);

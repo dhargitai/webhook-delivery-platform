@@ -1,4 +1,5 @@
 import type { Endpoint, EndpointStatus } from './endpoints.repository.js';
+import type { CreatedEndpoint } from './endpoints.service.js';
 
 /** What the API returns for an endpoint: no tenant id, ISO dates, snake_case like the rest of the API. */
 export interface EndpointResponse {
@@ -17,4 +18,15 @@ export function toEndpointResponse(endpoint: Endpoint): EndpointResponse {
     status: endpoint.status,
     created_at: endpoint.createdAt.toISOString(),
   };
+}
+
+/** The creation response is the one place the signing secret is ever shown. */
+export interface CreatedEndpointResponse extends EndpointResponse {
+  secret: string;
+}
+
+export function toCreatedEndpointResponse(
+  created: CreatedEndpoint,
+): CreatedEndpointResponse {
+  return { ...toEndpointResponse(created.endpoint), secret: created.secret };
 }

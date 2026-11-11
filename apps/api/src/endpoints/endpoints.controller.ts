@@ -17,7 +17,9 @@ import {
   replaceSubscriptionsSchema,
 } from './endpoint.schemas.js';
 import {
+  type CreatedEndpointResponse,
   type EndpointResponse,
+  toCreatedEndpointResponse,
   toEndpointResponse,
 } from './endpoint.response.js';
 import { CreateEndpointPipe } from './create-endpoint.pipe.js';
@@ -35,8 +37,10 @@ export class EndpointsController {
   async create(
     @CurrentTenant() tenantId: string,
     @Body(CreateEndpointPipe) body: CreateEndpointBody,
-  ): Promise<EndpointResponse> {
-    return toEndpointResponse(await this.endpoints.create(tenantId, body));
+  ): Promise<CreatedEndpointResponse> {
+    return toCreatedEndpointResponse(
+      await this.endpoints.create(tenantId, body),
+    );
   }
 
   @Get()

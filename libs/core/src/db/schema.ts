@@ -26,6 +26,8 @@ export interface EndpointsTable {
   id: Generated<string>;
   tenant_id: string;
   url: string;
+  /** `whsec_...`, plaintext until secrets are encrypted at rest. */
+  signing_secret: string;
   description: ColumnType<
     string | null,
     string | null | undefined,
