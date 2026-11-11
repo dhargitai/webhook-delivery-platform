@@ -25,6 +25,19 @@ export interface SafeHttpClientOptions {
    * the connection goes to the very address that was checked.
    */
   lookup?: LookupFunction;
+  /**
+   * Checked before connecting, with the URL's host. Returns why the host must
+   * be refused, or `undefined`. It exists because Node skips `lookup` for a
+   * host that is already an IP address (`http://169.254.169.254/`), so the
+   * guard has to look at those here. IPv6 hosts come without their brackets.
+   */
+  hostCheck?: (hostname: string) => string | undefined;
+  /**
+   * An extra root certificate to trust for https, on top of the system's. It
+   * adds trust and nothing else: the certificate chain and the host name are
+   * still verified. For a private CA, and for tests with a self-signed one.
+   */
+  ca?: string | Buffer;
 }
 
 export type HttpFailureKind =
@@ -34,6 +47,7 @@ export type HttpFailureKind =
   | 'connect_timeout'
   | 'timeout'
   | 'network_error'
+  | 'ssrf_blocked'
   | 'invalid_url';
 
 export type HttpResult =
@@ -58,6 +72,9 @@ export class SafeHttpClient {
   private readonly connectTimeoutMs: number;
   private readonly totalTimeoutMs: number;
   private readonly lookup: LookupFunction | undefined;
+  private readonly hostCheck:
+    ((hostname: string) => string | undefined) | undefined;
+  private readonly ca: string | Buffer | undefined;
 
   constructor({
     snippetBytes = DEFAULT_SNIPPET_BYTES,
@@ -65,6 +82,8 @@ export class SafeHttpClient {
     connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
     totalTimeoutMs = DEFAULT_TOTAL_TIMEOUT_MS,
     lookup,
+    hostCheck,
+    ca,
   }: SafeHttpClientOptions = {}) {
     requirePositiveInteger('snippetBytes', snippetBytes);
     requirePositiveInteger('maxResponseBytes', maxResponseBytes);
@@ -81,6 +100,8 @@ export class SafeHttpClient {
     this.connectTimeoutMs = connectTimeoutMs;
     this.totalTimeoutMs = totalTimeoutMs;
     this.lookup = lookup;
+    this.hostCheck = hostCheck;
+    this.ca = ca;
   }
 
   post(
@@ -100,6 +121,16 @@ export class SafeHttpClient {
         kind: 'invalid_url',
         latencyMs: latency(),
         error: 'the URL must be an absolute http or https URL',
+      });
+    }
+    // The URL parser keeps the brackets of an IPv6 host; an address has none.
+    const blocked = this.hostCheck?.(target.hostname.replace(/^\[|\]$/g, ''));
+    if (blocked !== undefined) {
+      return Promise.resolve({
+        outcome: 'failed',
+        kind: 'ssrf_blocked',
+        latencyMs: latency(),
+        error: blocked,
       });
     }
     const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
@@ -124,6 +155,8 @@ export class SafeHttpClient {
           // is decided when connecting (the SSRF guard pins the IP there).
           agent: false,
           lookup: this.lookup,
+          // Only https looks at it; http ignores the option.
+          ca: this.ca,
         },
         (res) => {
           const status = res.statusCode ?? 0;
@@ -217,6 +250,15 @@ export class SafeHttpClient {
 function networkError(error: Error, latencyMs: number): HttpResult {
   // A connection error often has an empty message; its code says what happened.
   const code = (error as NodeJS.ErrnoException).code;
+  // The guard's refusal, raised from `lookup`: not a network fault.
+  if (code === 'ESSRF') {
+    return {
+      outcome: 'failed',
+      kind: 'ssrf_blocked',
+      latencyMs,
+      error: error.message,
+    };
+  }
   return {
     outcome: 'failed',
     kind: 'network_error',

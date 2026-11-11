@@ -4,9 +4,23 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
-import type { AddressInfo, LookupFunction } from 'node:net';
+import {
+  createServer as createHttpsServer,
+  type Server as HttpsServer,
+} from 'node:https';
+import type { LookupAddress } from 'node:dns';
+import {
+  createServer as createTcpServer,
+  type AddressInfo,
+  type LookupFunction,
+  type Server as TcpServer,
+  type Socket,
+} from 'node:net';
+import { createSecureContext } from 'node:tls';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SafeHttpClient, type HttpResult } from './safe-http-client.js';
+import { SsrfGuard } from './ssrf-guard.js';
+import { TLS_FIXTURE } from './testing/tls-fixture.js';
 
 interface Received {
   headers: IncomingMessage['headers'];
@@ -442,6 +456,164 @@ describe('SafeHttpClient.post', () => {
     });
   });
 
+  describe('SSRF protection', () => {
+    /** A client wired to the guard the way the worker will wire it. */
+    function guardedClient(guard: SsrfGuard) {
+      return new SafeHttpClient({
+        lookup: guard.lookup,
+        hostCheck: (hostname) => guard.blockedHostReason(hostname),
+        connectTimeoutMs: 300,
+        totalTimeoutMs: 600,
+      });
+    }
+    const resolvingTo = (...addresses: LookupAddress[]) =>
+      new SsrfGuard({ resolve: () => Promise.resolve(addresses) });
+    const neverResolving = new SsrfGuard({
+      resolve: () =>
+        Promise.reject(new Error('a literal host must not be resolved')),
+    });
+
+    it.each([
+      [
+        'an IPv4 loopback literal',
+        (port: string) => `http://127.0.0.1:${port}/hook`,
+        /loopback/,
+      ],
+      [
+        'an IPv6 loopback literal',
+        (port: string) => `http://[::1]:${port}/hook`,
+        /loopback/,
+      ],
+      [
+        'a decimal IPv4 literal',
+        (port: string) => `http://2130706433:${port}/hook`,
+        /loopback/,
+      ],
+      [
+        'a hex and short IPv4 literal',
+        (port: string) => `http://0x7f.1:${port}/hook`,
+        /loopback/,
+      ],
+      [
+        'a mapped IPv6 literal',
+        (port: string) => `http://[::ffff:10.0.0.1]:${port}/hook`,
+        /private network/,
+      ],
+      [
+        'the cloud metadata address',
+        (port: string) => `http://169.254.169.254:${port}/latest/meta-data`,
+        /link-local/,
+      ],
+    ])('never connects to %s', async (_name, urlFor, reason) => {
+      const { url, received } = await listen(answer(200));
+
+      const result = await guardedClient(neverResolving).post(
+        urlFor(new URL(url).port),
+        {},
+        '{}',
+      );
+
+      expect(result).toMatchObject({ outcome: 'failed', kind: 'ssrf_blocked' });
+      expect(result).toMatchObject({ error: expect.stringMatching(reason) });
+      expect(received).toHaveLength(0);
+    });
+
+    it('refuses a name that resolves to a private address, without connecting', async () => {
+      const { url, received } = await listen(answer(200));
+      const guard = resolvingTo({ address: '10.0.0.1', family: 4 });
+
+      const result = await guardedClient(guard).post(
+        `http://private.test:${new URL(url).port}/hook`,
+        {},
+        '{}',
+      );
+
+      expect(result).toMatchObject({ outcome: 'failed', kind: 'ssrf_blocked' });
+      expect(result).toMatchObject({
+        error: expect.stringMatching(/10\.0\.0\.1.*private network/),
+      });
+      expect(received).toHaveLength(0);
+    });
+
+    it('reaches an allowlisted host, connecting to the address it resolved to', async () => {
+      const { url, received } = await listen(answer(200, 'allowed'));
+      const guard = new SsrfGuard({
+        resolve: () => Promise.resolve([{ address: '127.0.0.1', family: 4 }]),
+        allowHosts: ['mock-receiver'],
+      });
+
+      const result = await guardedClient(guard).post(
+        `http://mock-receiver:${new URL(url).port}/hook`,
+        {},
+        '{}',
+      );
+
+      expect(result).toMatchObject({ outcome: 'success', snippet: 'allowed' });
+      expect(received).toHaveLength(1);
+      expect(received[0]?.headers.host).toBe(
+        `mock-receiver:${new URL(url).port}`,
+      );
+    });
+
+    it('still calls a public host the guard lets through', async () => {
+      const { url, received } = await listen(answer(200));
+      // Public to the guard; the connection itself is steered to the test server.
+      const guard = new SsrfGuard({
+        resolve: () =>
+          Promise.resolve([{ address: '93.184.216.34', family: 4 }]),
+      });
+      const steered = new SafeHttpClient({
+        lookup: (hostname, options, callback) =>
+          guard.lookup(hostname, options, (error, address, family) => {
+            if (error) return callback(error, '');
+            callback(
+              null,
+              options.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1',
+              family,
+            );
+          }),
+        hostCheck: (hostname) => guard.blockedHostReason(hostname),
+      });
+
+      const result = await steered.post(
+        `http://public.test:${new URL(url).port}/hook`,
+        {},
+        '{}',
+      );
+
+      expect(result).toMatchObject({ outcome: 'success' });
+      expect(received).toHaveLength(1);
+    });
+
+    it('keeps an ordinary lookup failure a network error', async () => {
+      const failing = new SafeHttpClient({
+        lookup: (_hostname, _options, callback) =>
+          callback(
+            Object.assign(new Error('getaddrinfo ENOTFOUND gone.test'), {
+              code: 'ENOTFOUND',
+            }),
+            '',
+          ),
+      });
+
+      const result = await failing.post('http://gone.test/hook', {}, '{}');
+
+      expect(result).toMatchObject({
+        outcome: 'failed',
+        kind: 'network_error',
+      });
+    });
+
+    it('calls no host check unless one is given', async () => {
+      const { url } = await listen(answer(200));
+
+      // The default client connects to a loopback literal, as every other test does.
+      await expect(client.post(url, {}, '{}')).resolves.toMatchObject({
+        outcome: 'success',
+      });
+    });
+  });
+
   describe('an unusable URL', () => {
     it.each([
       '',
@@ -487,6 +659,176 @@ describe('SafeHttpClient.post', () => {
 
     expect(result).toMatchObject({ outcome: 'failed', kind: 'network_error' });
     expect(result.outcome === 'failed' && result.error).toMatch(/\S/);
+  });
+});
+
+describe('SafeHttpClient over https', () => {
+  const servers: Array<HttpsServer | TcpServer> = [];
+  const sockets: Socket[] = [];
+
+  afterEach(async () => {
+    for (const socket of sockets.splice(0)) socket.destroy();
+    await Promise.all(
+      servers
+        .splice(0)
+        .map(
+          (server) =>
+            new Promise<void>((resolve) => server.close(() => resolve())),
+        ),
+    );
+  });
+
+  interface TlsReceiver {
+    port: number;
+    /** The TLS server name each client asked for (SNI). */
+    serverNames: string[];
+    /** The Host header of each request that got through the handshake. */
+    hosts: Array<string | undefined>;
+  }
+
+  async function listenTls(
+    respond: (res: ServerResponse) => void = (res) => res.end('secure'),
+  ): Promise<TlsReceiver> {
+    const receiver: TlsReceiver = { port: 0, serverNames: [], hosts: [] };
+    const context = createSecureContext({
+      key: TLS_FIXTURE.key,
+      cert: TLS_FIXTURE.cert,
+    });
+    const server = createHttpsServer(
+      {
+        SNICallback: (serverName, done) => {
+          receiver.serverNames.push(serverName);
+          done(null, context);
+        },
+      },
+      (req, res) => {
+        receiver.hosts.push(req.headers.host);
+        respond(res);
+      },
+    );
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    receiver.port = (server.address() as AddressInfo).port;
+    return receiver;
+  }
+
+  /** The guard as the worker wires it; every name goes to the test server. */
+  function clientFor(
+    hostnames: string[],
+    options: {
+      ca?: string;
+      connectTimeoutMs?: number;
+      totalTimeoutMs?: number;
+    } = {},
+  ) {
+    const guard = new SsrfGuard({
+      resolve: () => Promise.resolve([{ address: '127.0.0.1', family: 4 }]),
+      allowHosts: hostnames,
+    });
+    return new SafeHttpClient({
+      lookup: guard.lookup,
+      hostCheck: (hostname) => guard.blockedHostReason(hostname),
+      ...options,
+    });
+  }
+
+  it('connects to the checked address while SNI and Host carry the URL name', async () => {
+    const receiver = await listenTls();
+    const client = clientFor([TLS_FIXTURE.hostname], { ca: TLS_FIXTURE.cert });
+
+    const result = await client.post(
+      `https://${TLS_FIXTURE.hostname}:${receiver.port}/hook`,
+      {},
+      '{}',
+    );
+
+    // `receiver.test` is not in DNS: only the pinned address got us here.
+    expect(result).toMatchObject({ outcome: 'success', snippet: 'secure' });
+    expect(receiver.serverNames).toEqual([TLS_FIXTURE.hostname]);
+    expect(receiver.hosts).toEqual([
+      `${TLS_FIXTURE.hostname}:${receiver.port}`,
+    ]);
+  });
+
+  it('still verifies the certificate: a trusted root is added, not verification dropped', async () => {
+    const receiver = await listenTls();
+    const client = clientFor([TLS_FIXTURE.hostname]);
+
+    const result = await client.post(
+      `https://${TLS_FIXTURE.hostname}:${receiver.port}/hook`,
+      {},
+      '{}',
+    );
+
+    expect(result).toMatchObject({ outcome: 'failed', kind: 'network_error' });
+    expect(result).toMatchObject({
+      error: expect.stringMatching(/SELF_SIGNED|UNABLE_TO_VERIFY/),
+    });
+    expect(receiver.hosts).toHaveLength(0);
+  });
+
+  it('refuses a certificate that does not cover the URL name', async () => {
+    const receiver = await listenTls();
+    const client = clientFor(['other.test'], { ca: TLS_FIXTURE.cert });
+
+    const result = await client.post(
+      `https://other.test:${receiver.port}/hook`,
+      {},
+      '{}',
+    );
+
+    expect(result).toMatchObject({ outcome: 'failed', kind: 'network_error' });
+    expect(result).toMatchObject({ error: expect.stringMatching(/ALTNAME/) });
+    expect(receiver.hosts).toHaveLength(0);
+  });
+
+  it('gives up when the TLS handshake never completes', async () => {
+    // Accepts the TCP connection and never speaks TLS: the connect timer must
+    // outlast the TCP connect and stop only at secureConnect.
+    const silent = createTcpServer((socket) => sockets.push(socket));
+    servers.push(silent);
+    await new Promise<void>((resolve) =>
+      silent.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = silent.address() as AddressInfo;
+    const client = clientFor([TLS_FIXTURE.hostname], {
+      ca: TLS_FIXTURE.cert,
+      connectTimeoutMs: 100,
+      totalTimeoutMs: 600,
+    });
+
+    const result = await client.post(
+      `https://${TLS_FIXTURE.hostname}:${port}/hook`,
+      {},
+      '{}',
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'failed',
+      kind: 'connect_timeout',
+    });
+    expect(result.latencyMs).toBeLessThan(400);
+  });
+
+  it('does not cut a slow answer once the handshake is done', async () => {
+    const receiver = await listenTls((res) => {
+      setTimeout(() => res.end('late'), 250);
+    });
+    const client = clientFor([TLS_FIXTURE.hostname], {
+      ca: TLS_FIXTURE.cert,
+      connectTimeoutMs: 100,
+      totalTimeoutMs: 1_000,
+    });
+
+    const result = await client.post(
+      `https://${TLS_FIXTURE.hostname}:${receiver.port}/hook`,
+      {},
+      '{}',
+    );
+
+    expect(result).toMatchObject({ outcome: 'success', snippet: 'late' });
   });
 });
 
