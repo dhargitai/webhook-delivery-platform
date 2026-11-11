@@ -36,7 +36,8 @@ export async function setup(project: TestProject): Promise<void> {
     new RedisContainer('redis:8').start(),
     new PostgreSqlContainer('postgres:17-alpine').start(),
     // The module's 30 s default is too short for RabbitMQ on a busy machine.
-    new RabbitMQContainer('rabbitmq:4').withStartupTimeout(120_000).start(),
+    // Pinned to the same minor as docker-compose.yml (guarded by a unit spec).
+    new RabbitMQContainer('rabbitmq:4.4').withStartupTimeout(120_000).start(),
   ]);
   project.provide('redisUrl', redis.getConnectionUrl());
   project.provide('postgresAdminUrl', postgres.getConnectionUri());

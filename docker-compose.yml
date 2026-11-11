@@ -52,7 +52,9 @@ services:
       retries: 20
 
   rabbitmq:
-    image: rabbitmq:4-management
+    # Pinned to the same minor as vitest.integration.setup.ts: the dispatch
+    # retry relies on 4.4's delivery-limit behaviour for requeued messages.
+    image: rabbitmq:4.4-management
     ports:
       # Management UI, login guest / guest.
       - "15672:15672"
