@@ -12,8 +12,13 @@ export const RETRY_SCHEDULE_MS: readonly number[] = [
 /** PRD: 7 retries after the first try, so 8 attempts in all. */
 export const MAX_ATTEMPTS = RETRY_SCHEDULE_MS.length + 1;
 
-/** The jitter bucket every retry uses until jitter is applied. */
-const MIDDLE_BUCKET = 1;
+/**
+ * PRD: fixed-TTL tier queues give every message in a queue the same delay, so
+ * jitter cannot be per message. Each tier has three queues instead, at 0.8x,
+ * 1.0x and 1.2x its base delay, and the policy picks one at random. Integer
+ * percents keep the arithmetic free of float noise.
+ */
+const JITTER_PERCENT: readonly number[] = [80, 100, 120];
 
 export type RetryDecision =
   | { action: 'retry'; delay: number; tier: number; bucket: number }
@@ -26,9 +31,10 @@ export type RetryDecision =
 export class RetryPolicy {
   /**
    * `attempt` is the 1-based number of the attempt that just failed. `delay`
-   * is in ms.
+   * is in ms. `rng` returns a number in [0, 1) and picks the jitter bucket; it
+   * is injected so the choice is reproducible, and only called for a retry.
    */
-  next(attempt: number, _rng: () => number): RetryDecision {
+  next(attempt: number, rng: () => number): RetryDecision {
     if (!Number.isInteger(attempt) || attempt < 1) {
       throw new RangeError(
         `attempt must be a positive integer, got ${attempt}`,
@@ -40,11 +46,24 @@ export class RetryPolicy {
     if (delay === undefined) {
       return { action: 'dead' };
     }
+    const { bucket, percent } = pickBucket(rng);
     return {
       action: 'retry',
-      delay,
+      delay: (delay * percent) / 100,
       tier,
-      bucket: MIDDLE_BUCKET,
+      bucket,
     };
   }
+}
+
+function pickBucket(rng: () => number): { bucket: number; percent: number } {
+  const value = rng();
+  const bucket = Math.floor(value * JITTER_PERCENT.length);
+  // Anything outside [0, 1), a NaN included, lands outside the buckets, so
+  // the lookup is also the range check.
+  const percent = JITTER_PERCENT[bucket];
+  if (percent === undefined) {
+    throw new RangeError(`rng must return a number in [0, 1), got ${value}`);
+  }
+  return { bucket, percent };
 }
