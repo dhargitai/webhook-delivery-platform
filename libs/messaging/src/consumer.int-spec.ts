@@ -2,7 +2,7 @@ import type { ConsumeMessage } from 'amqplib';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { ConfirmPublisher } from './confirm-publisher.js';
 import { BrokerConnection } from './connection.js';
-import { Consumer } from './consumer.js';
+import { Consumer, RequeueError } from './consumer.js';
 import { EVENT_PUBLISHED_ROUTING_KEY } from './names.js';
 import { eventually, testingNamespace } from './testing/helpers.js';
 import { declareTopology, DELIVERY_LIMIT } from './topology.js';
@@ -95,6 +95,58 @@ describe('Consumer (real RabbitMQ)', () => {
     const probe = await conn.createChannel();
     const dead = await probe.get(names.deadLetterQueue, { noAck: true });
     expect(dead !== false && dead.content.toString()).toBe('poison');
+  });
+
+  it('redelivers a message whose handler throws RequeueError, without dead-lettering it', async () => {
+    const { names, send, depth } = await setUp();
+    let calls = 0;
+    const channel = await conn.createChannel();
+    await Consumer.start(
+      channel,
+      names.dispatchQueue,
+      async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new RequeueError('broker busy');
+        }
+      },
+      { prefetch: 1, onHandlerError: noop },
+    );
+
+    await send('again');
+
+    await eventually(async () => {
+      expect(calls).toBe(2);
+      expect(await depth(names.dispatchQueue)).toBe(0);
+    });
+    expect(await depth(names.deadLetterQueue)).toBe(0);
+  });
+
+  it('never dead-letters a message that is requeued over and over, past the delivery limit', async () => {
+    // Pins RabbitMQ 4.4: a nack with requeue does not count toward the limit.
+    const { names, send, depth } = await setUp();
+    const requeues = DELIVERY_LIMIT * 3;
+    let calls = 0;
+    const channel = await conn.createChannel();
+    await Consumer.start(
+      channel,
+      names.dispatchQueue,
+      async () => {
+        calls += 1;
+        if (calls <= requeues) {
+          throw new RequeueError('not yet');
+        }
+      },
+      { prefetch: 1, onHandlerError: noop },
+    );
+
+    await send('patient');
+
+    await eventually(async () => {
+      expect(calls).toBe(requeues + 1);
+      expect(await depth(names.dispatchQueue)).toBe(0);
+    });
+    expect(await depth(names.deadLetterQueue)).toBe(0);
   });
 
   it('reports a handler error together with its message', async () => {

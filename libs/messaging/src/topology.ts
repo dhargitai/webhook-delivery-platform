@@ -75,6 +75,39 @@ export async function declareEventTopology(
   return names;
 }
 
+export interface DispatchRetryOptions {
+  /** How long a failed event waits before it is dispatched again. */
+  delayMs: number;
+  namespace?: string;
+}
+
+/**
+ * Declares the queue a failed dispatch waits in. After `delayMs` the broker
+ * dead-letters the message through the events exchange back onto the dispatch
+ * queue, so the pause costs no consumer slot and survives a restart. Declared
+ * by the dispatcher only; the relay does not need it. Idempotent. Call
+ * `declareEventTopology` first.
+ */
+export async function declareDispatchRetryTopology(
+  channel: Channel,
+  { delayMs, namespace }: DispatchRetryOptions,
+): Promise<TopologyNames> {
+  if (!Number.isInteger(delayMs) || delayMs < 1) {
+    throw new RangeError(`delayMs must be a positive integer, got ${delayMs}`);
+  }
+  const names = topologyNames(namespace);
+  await channel.assertQueue(names.dispatchRetryQueue(delayMs), {
+    durable: true,
+    arguments: {
+      'x-queue-type': 'quorum',
+      'x-message-ttl': delayMs,
+      'x-dead-letter-exchange': names.eventsExchange,
+      'x-dead-letter-routing-key': EVENT_PUBLISHED_ROUTING_KEY,
+    },
+  });
+  return names;
+}
+
 /**
  * Declares everything: the events side plus the deliveries exchange and its
  * lane queues. Idempotent, so every service can call it at startup. RabbitMQ

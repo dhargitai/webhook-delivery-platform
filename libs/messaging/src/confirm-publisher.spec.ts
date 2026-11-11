@@ -99,6 +99,18 @@ describe('ConfirmPublisher', () => {
     });
   });
 
+  it('passes the given headers on to the broker', async () => {
+    await publisher.publish('ex', 'key', body, {
+      ...props,
+      headers: { 'x-attempt': 2, 'x-reason': 'boom' },
+    });
+
+    expect(channel.published[0]?.options.headers).toEqual({
+      'x-attempt': 2,
+      'x-reason': 'boom',
+    });
+  });
+
   it('rejects when the broker nacks', async () => {
     channel.behaviour = 'nack';
 

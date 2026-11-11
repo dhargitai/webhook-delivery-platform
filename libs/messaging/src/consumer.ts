@@ -1,12 +1,27 @@
 import type { Channel, ConsumeMessage } from 'amqplib';
 
+/**
+ * Thrown by a handler that could not finish but must not lose the message,
+ * for example when it failed to park the message elsewhere. The consumer
+ * returns the message to its queue. On RabbitMQ 4.4 a nack with requeue does
+ * not count toward `x-delivery-limit`, so this never dead-letters by itself:
+ * use it only where something else paces the retry, such as a confirm timeout.
+ */
+export class RequeueError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = new.target.name;
+  }
+}
+
 export type MessageHandler = (message: ConsumeMessage) => Promise<void>;
 
 export interface ConsumerOptions {
   /** Most unacknowledged messages in flight, so also the most handlers at once. */
   prefetch: number;
   /**
-   * Called when a handler throws, or when an ack or nack could not be sent.
+   * Called when a handler throws (a `RequeueError` included), or when an ack
+   * or nack could not be sent.
    * Must not throw.
    */
   onHandlerError: (error: unknown, message: ConsumeMessage) => void;
@@ -16,7 +31,7 @@ export interface ConsumerOptions {
  * Consumes a queue with manual acks, in this order: run the handler, then ack.
  * A handler that throws gets its message rejected without requeue, which sends
  * it to the dead-letter exchange immediately. A requeue would redeliver it in
- * a tight loop. A consumer that dies mid-handler never acks, so the broker
+ * a tight loop. The exception is `RequeueError`, which asks for the requeue. A consumer that dies mid-handler never acks, so the broker
  * redelivers the message (at-least-once).
  */
 export class Consumer {
@@ -49,7 +64,8 @@ export class Consumer {
 
       try {
         if (failure) {
-          channel.nack(message, false, false);
+          const requeue = failure.error instanceof RequeueError;
+          channel.nack(message, false, requeue);
         } else {
           channel.ack(message);
         }
