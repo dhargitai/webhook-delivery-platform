@@ -187,6 +187,93 @@ describe('SafeHttpClient.post', () => {
     expect(result).toMatchObject({ outcome: 'success', snippet: 'ok' });
   });
 
+  describe('response cap', () => {
+    const capped = new SafeHttpClient({ maxResponseBytes: 100 });
+
+    it('accepts a body of exactly the cap', async () => {
+      const { url } = await listen(answer(200, 'x'.repeat(100)));
+
+      const result = await capped.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ outcome: 'success', status: 200 });
+    });
+
+    it('fails a 2xx whose body is one byte over the cap', async () => {
+      const { url } = await listen(answer(200, 'x'.repeat(101)));
+
+      const result = await capped.post(url, {}, '{}');
+
+      expect(result).toMatchObject({
+        outcome: 'failed',
+        kind: 'response_too_large',
+        status: 200,
+      });
+    });
+
+    it('defaults to 64 KB', async () => {
+      const exact = await listen(answer(200, 'x'.repeat(65_536)));
+      const over = await listen(answer(200, 'x'.repeat(65_537)));
+
+      expect(await client.post(exact.url, {}, '{}')).toMatchObject({
+        outcome: 'success',
+      });
+      expect(await client.post(over.url, {}, '{}')).toMatchObject({
+        kind: 'response_too_large',
+      });
+    });
+
+    it('counts a chunked body that declares no length', async () => {
+      const { url } = await listen((res) => {
+        res.writeHead(200);
+        res.write('x'.repeat(60));
+        res.end('x'.repeat(60));
+      });
+
+      const result = await capped.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ kind: 'response_too_large' });
+    });
+
+    it('reports an oversized error response as too large, with its status', async () => {
+      const { url } = await listen(answer(500, 'x'.repeat(500)));
+
+      const result = await capped.post(url, {}, '{}');
+
+      expect(result).toMatchObject({
+        kind: 'response_too_large',
+        status: 500,
+      });
+    });
+
+    it('still returns the start of the body as a snippet', async () => {
+      const { url } = await listen(answer(200, 'y'.repeat(500)));
+
+      const result = await capped.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ snippet: 'y'.repeat(100) });
+    });
+
+    it('stops reading an endless response and closes the connection', async () => {
+      let serverSawClose: () => void = () => {};
+      const closed = new Promise<void>((resolve) => {
+        serverSawClose = resolve;
+      });
+      const { url } = await listen((res) => {
+        res.writeHead(200);
+        const timer = setInterval(() => res.write('x'.repeat(50)), 5);
+        res.on('close', () => {
+          clearInterval(timer);
+          serverSawClose();
+        });
+      });
+
+      const result = await capped.post(url, {}, '{}');
+
+      expect(result).toMatchObject({ kind: 'response_too_large' });
+      await closed;
+    });
+  });
+
   it('reports a refused connection as a network error', async () => {
     const { url } = await listen(answer(200));
     // Closing the only listener leaves a port nothing answers on.
@@ -198,4 +285,24 @@ describe('SafeHttpClient.post', () => {
     expect(result).toMatchObject({ outcome: 'failed', kind: 'network_error' });
     expect(result.outcome === 'failed' && result.error).toMatch(/\S/);
   });
+});
+
+describe('SafeHttpClient options', () => {
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses %s as maxResponseBytes',
+    (value) => {
+      expect(() => new SafeHttpClient({ maxResponseBytes: value })).toThrow(
+        RangeError,
+      );
+    },
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses %s as snippetBytes',
+    (value) => {
+      expect(() => new SafeHttpClient({ snippetBytes: value })).toThrow(
+        RangeError,
+      );
+    },
+  );
 });

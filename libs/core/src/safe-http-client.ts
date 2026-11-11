@@ -3,13 +3,18 @@ import { request as httpsRequest } from 'node:https';
 
 /** PRD: the stored response snippet is at most 1 KB. */
 const DEFAULT_SNIPPET_BYTES = 1_024;
+/** PRD: a response is read up to about 64 KB. */
+const DEFAULT_MAX_RESPONSE_BYTES = 65_536;
 
 export interface SafeHttpClientOptions {
   /** How many bytes of the response body to keep as a snippet. */
   snippetBytes?: number;
+  /** A response body longer than this fails the attempt. */
+  maxResponseBytes?: number;
 }
 
-export type HttpFailureKind = 'http_error' | 'redirect' | 'network_error';
+export type HttpFailureKind =
+  'http_error' | 'redirect' | 'response_too_large' | 'network_error';
 
 export type HttpResult =
   | { outcome: 'success'; status: number; latencyMs: number; snippet: string }
@@ -29,11 +34,16 @@ export type HttpResult =
  */
 export class SafeHttpClient {
   private readonly snippetBytes: number;
+  private readonly maxResponseBytes: number;
 
   constructor({
     snippetBytes = DEFAULT_SNIPPET_BYTES,
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
   }: SafeHttpClientOptions = {}) {
+    requirePositiveInteger('snippetBytes', snippetBytes);
+    requirePositiveInteger('maxResponseBytes', maxResponseBytes);
     this.snippetBytes = snippetBytes;
+    this.maxResponseBytes = maxResponseBytes;
   }
 
   post(
@@ -47,6 +57,8 @@ export class SafeHttpClient {
     const target = new URL(url);
     const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
 
+    // A promise settles once, so the error that destroying the request raises
+    // after an oversized body cannot replace the result already resolved.
     return new Promise<HttpResult>((resolve) => {
       const req = send(
         target,
@@ -58,23 +70,39 @@ export class SafeHttpClient {
           agent: false,
         },
         (res) => {
+          const status = res.statusCode ?? 0;
+          // Never keep more than the cap, even if the snippet is set higher.
+          const keepLimit = Math.min(this.snippetBytes, this.maxResponseBytes);
           const chunks: Buffer[] = [];
           let kept = 0;
+          let received = 0;
+          const snippet = () => Buffer.concat(chunks).toString('utf8');
           res.on('data', (chunk: Buffer) => {
-            // Keep reading to the end, but store only what the snippet needs.
-            const part = chunk.subarray(0, this.snippetBytes - kept);
+            received += chunk.length;
+            const part = chunk.subarray(0, keepLimit - kept);
             chunks.push(part);
             kept += part.length;
+            // Counted here, not taken from content-length: a chunked body
+            // declares none, and a header can lie.
+            if (received > this.maxResponseBytes) {
+              resolve({
+                outcome: 'failed',
+                kind: 'response_too_large',
+                status,
+                latencyMs: latency(),
+                snippet: snippet(),
+              });
+              // Stop reading: a receiver must not be able to stream forever.
+              req.destroy();
+            }
           });
           res.on('end', () => {
-            const status = res.statusCode ?? 0;
-            const snippet = Buffer.concat(chunks).toString('utf8');
             if (status >= 200 && status < 300) {
               resolve({
                 outcome: 'success',
                 status,
                 latencyMs: latency(),
-                snippet,
+                snippet: snippet(),
               });
               return;
             }
@@ -88,7 +116,7 @@ export class SafeHttpClient {
               kind,
               status,
               latencyMs: latency(),
-              snippet,
+              snippet: snippet(),
             });
           });
           res.on('error', (error) => resolve(networkError(error, latency())));
@@ -109,4 +137,10 @@ function networkError(error: Error, latencyMs: number): HttpResult {
     latencyMs,
     error: [code, error.message].filter(Boolean).join(': ') || error.name,
   };
+}
+
+function requirePositiveInteger(name: string, value: number): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError(`${name} must be a positive integer, got ${value}`);
+  }
 }
