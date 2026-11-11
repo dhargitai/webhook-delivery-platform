@@ -45,7 +45,7 @@ flowchart LR
     PG -- "poll, SKIP LOCKED" --> Relay[Outbox relay]
     Relay -- "publish + confirms" --> Ex{{events exchange}}
     Ex --> QDisp[/dispatch queue/] --> Disp[Dispatcher]
-    Disp -- "subscriptions" --> Redis[[Redis]]
+    Disp -- "subscriptions" --> PG
     Disp --> ExDel{{deliveries exchange}}
     ExDel --> QFresh[/fresh.shard.NN/] --> Worker[Delivery worker]
     Worker -- "breaker, cap, tokens" --> Redis
@@ -107,8 +107,8 @@ migrations/           SQL schema (node-pg-migrate)
 Dockerfile            one image for every service, Node 24 runtime
 docker-compose.yml    the full stack
 docs/
-  PRD-v1.0.md       product requirements and locked design parameters
-  PRD-task-v1.8.md  implementation task breakdown, with status per task
+  PRD-v1.1.md       product requirements and locked design parameters
+  PRD-task-v1.9.md  implementation task breakdown, with status per task
 tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
@@ -264,7 +264,7 @@ The PRD locks further parameters, which become environment variables as each fea
 | `TIME_SCALE`     | `1` (demo `30`, tests `1000`) | Divides every retry delay                                    |
 | `SECRETS_KEK_V1` | none                          | Base64 32-byte key that wraps endpoint secrets (AES-256-GCM) |
 
-See [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md), section 6, "Locked parameters", for the full list of values.
+See [`docs/PRD-v1.1.md`](docs/PRD-v1.1.md), section 6, "Locked parameters", for the full list of values.
 
 ## Deployment
 
@@ -288,8 +288,8 @@ The three demo scenes: (1) kill the receiver and watch retries, the breaker open
 
 ## Documentation
 
-- [`docs/PRD-v1.0.md`](docs/PRD-v1.0.md): the product requirements document, covering scope, user stories, deep modules, implementation decisions and locked parameters, testing strategy, phases and risks.
-- [`docs/PRD-task-v1.8.md`](docs/PRD-task-v1.8.md): the implementation task breakdown, with the status of every task.
+- [`docs/PRD-v1.1.md`](docs/PRD-v1.1.md): the product requirements document, covering scope, user stories, deep modules, implementation decisions and locked parameters, testing strategy, phases and risks.
+- [`docs/PRD-task-v1.9.md`](docs/PRD-task-v1.9.md): the implementation task breakdown, with the status of every task.
 
 ## License
 

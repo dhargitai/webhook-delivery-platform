@@ -1,7 +1,7 @@
 **Status:** Approved
-**Date:** 2026-11-10
+**Date:** 2026-11-11
 **Author:** David Hargitai
-**Version:** 1.0
+**Version:** 1.1
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -126,7 +126,7 @@ flowchart LR
     PG -- "poll, SKIP LOCKED" --> Relay[Outbox relay]
     Relay -- "publish + confirms" --> Ex{{events exchange}}
     Ex --> QDisp[/dispatch queue/] --> Disp[Dispatcher]
-    Disp -- "subscriptions" --> Redis[[Redis]]
+    Disp -- "subscriptions" --> PG
     Disp --> ExDel{{deliveries exchange}}
     ExDel --> QFresh[/fresh.shard.NN/] --> Worker[Delivery worker]
     Worker -- "breaker, cap, tokens" --> Redis
@@ -144,9 +144,9 @@ Each module hides substantial logic behind a small, stable, testable interface.
 
 | Module                            | Interface (sketch)                                                                                         | Hides                                                                                                                                                                                |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **RetryPolicy**                   | `next(attempt, now, rng) -> {action: retry \| dead, delay, tier}`                                          | Schedule table, jitter, time-scale factor for demos, attempt budget. Pure function                                                                                                   |
+| **RetryPolicy**                   | `next(attempt, rng) -> {action: retry \| dead, delay, tier, bucket}`                                       | Schedule table, jitter, time-scale factor for demos, attempt budget. Pure function                                                                                                   |
 | **SignatureService**              | `sign(secrets[], id, timestamp, rawBody) -> header`; `verify(header, id, timestamp, body, secrets[], now)` | HMAC-SHA256 over `id.timestamp.body`, multiple secrets during rotation, constant-time comparison, tolerance window                                                                   |
-| **SsrfGuard / SafeHttpClient**    | `post(url, headers, body, limits) -> Result`                                                               | DNS resolution, IP deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), IP pinning with correct SNI/Host, no redirects, connect and total timeouts, response cap |
+| **SsrfGuard / SafeHttpClient**    | `post(url, headers, body) -> Result`                                                                       | DNS resolution, IP deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), IP pinning with correct SNI/Host, no redirects, connect and total timeouts, response cap |
 | **CircuitBreaker**                | `allow(endpointId) -> allow \| deny \| probe`; `record(endpointId, outcome)`                               | Redis state machine (closed, open, half-open), thresholds, single-probe election, cooldown                                                                                           |
 | **EndpointLimiter**               | `acquire(endpointId) -> Permit \| Denied`; `release(permit)`                                               | Concurrency semaphore and token bucket in Redis (atomic scripts), expiry of leaked permits                                                                                           |
 | **DeliveryStateMachine** (domain) | `Delivery.recordAttempt(result) -> events`, `Delivery.replay()`                                            | Legal states and transitions (pending, in-flight, succeeded, retrying, dead), invariants such as attempt budget                                                                      |
@@ -178,13 +178,14 @@ One monorepo with deployable apps (API, relay, dispatcher, worker, dashboard gat
 - **Lanes:** `fresh.shard.00..NN` (a small N for the demo, 16 in the design), shard by `hash(endpoint_id)`; a shared `retry.ready` lane; a short `delay` tier queue. Fresh lanes always get consumer priority.
 - **Retry tiers:** one queue per delay (about 5 s, 30 s, 5 min, 30 min, 2 h, 5 h, 10 h), each with a fixed `x-message-ttl` and a dead-letter exchange routing to `retry.ready`. Per-message TTL isn't used, because RabbitMQ expires only at the head of the queue. A **time-scale factor** compresses the schedule for demos.
 - **Worker order of operations:** attempt, log attempt, publish retry (or DLQ) and wait for the confirm, **then** ack. A crash in between can duplicate but never lose.
+- **Dispatch failures:** the dispatcher reads subscribers from Postgres on every event (the Redis subscription cache is not built; it is a scale-up path). A transient failure (publish error, confirm timeout, lookup error) parks the whole event in a retry queue and re-handles it after a pause, up to `DISPATCHER_MAX_ATTEMPTS`; deterministic `delivery_id`s make the re-handling idempotent. A malformed event, or one whose attempts run out, goes to the DLQ with its reason.
 - **Per-endpoint cap exceeded:** park the job in the delay tier without consuming an attempt. Never nack-requeue (it spins).
 - **Circuit open:** re-park without calling the endpoint and without consuming an attempt. Half-open: exactly one probe.
-- **Quorum queues** with `delivery-limit` for poison messages. Graceful shutdown: cancel consumers, finish in-flight work, close the channel, with a grace period larger than the HTTP timeout.
+- **Quorum queues** with `delivery-limit` for poison messages. Graceful shutdown: cancel consumers, finish in-flight work, close the channel, with a grace period larger than the HTTP timeout. The dev and test brokers are pinned to RabbitMQ 4.4, because the dispatcher's retry relies on its `delivery-limit` behaviour for returned messages (`nack` with requeue never counts toward the limit, `reject` with requeue does).
 
 ### Security
 
-- **SSRF:** validate at registration (HTTPS, port allowlist, no userinfo) **and at every connection** (resolve, check, pin the IP); no redirects; 3 s connect and 10 s total timeout; response capped at about 64 KB; egress restricted by network policy as defence in depth.
+- **SSRF:** validate at registration (HTTPS, port allowlist, no userinfo) **and at every connection** (resolve, check, pin the IP); no redirects; 3 s connect and 10 s total timeout; response capped at about 64 KB; the limits are `SafeHttpClient` constructor options, and every failure is a result kind (`http_error`, `redirect`, `response_too_large`, `connect_timeout`, `timeout`, `network_error`, `ssrf_blocked`, `invalid_url`), never a throw. A host that is already an IP literal never reaches the DNS lookup, so the client also takes a `hostCheck`; one `SsrfGuard` supplies both. One blocked address refuses the whole host. Egress restricted by network policy as defence in depth.
 - **Signing headers:** `webhook-id` (stable), `webhook-timestamp` (**regenerated on every attempt**, so a 20 h retry still passes a 5-minute window), `webhook-signature: v1,<base64>` over `id.timestamp.rawBody`. Sign the exact bytes sent.
 - **Secrets:** encrypted at rest with envelope encryption in Postgres, decrypted only in worker memory with a short cache. API keys are stored hashed with a lookup prefix.
 
@@ -209,7 +210,7 @@ Values below are the agreed defaults. Each is an environment variable or constan
 
 - **Bun workspaces** for packages, **Node 24** as the runtime in Docker and CI. Workspaces: `apps/*` (api, relay, dispatcher, worker, gateway, mock-receiver, dashboard) and `libs/*` (domain, core for the deep modules, messaging, observability). Package scope `@wdp/*`. No Nx for the MVP.
 - This repository is standalone. Shared libraries live inside it; other portfolio projects don't import from it.
-- The current single-app scaffold in `src/` is restructured into this layout at the start of Phase 1.
+- The current single-app scaffold in `src/` was restructured into this layout at the start of Phase 1.
 
 #### Ingest and outbox
 
@@ -326,6 +327,8 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 
 ## 9. Implementation Phases
 
+Checkmarks show what is built (✅) and what is not yet (⬜). The per-task status lives in the task document.
+
 ### Phase 1: Foundation and atomic ingestion
 
 **Goal:** accept events safely and publish them to the broker.
@@ -346,10 +349,10 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 
 **Deliverables**
 
-- ✅ Delivery worker with the SafeHttpClient and signing
-- ✅ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor
-- ✅ Correct ack ordering, quorum queues with delivery limit, graceful shutdown
-- ✅ Mongo attempt log with indexes and TTL
+- ⬜ Delivery worker with the SafeHttpClient and signing (the SignatureService, SafeHttpClient and SsrfGuard modules are built; the worker consuming the lanes is not)
+- ⬜ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor (the RetryPolicy and the topology are built; the worker that publishes to them is not)
+- ⬜ Correct ack ordering, quorum queues with delivery limit, graceful shutdown (quorum queues and the delivery limit are built; the rest needs the worker)
+- ⬜ Mongo attempt log with indexes and TTL
 
 **Validation:** failing receiver produces the scheduled attempts then a DLQ entry; killed worker loses nothing; retry timestamps are fresh while `webhook-id` is stable.
 
@@ -359,10 +362,11 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 
 **Deliverables**
 
-- ✅ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier
-- ✅ Sharded fresh lanes, separation of fresh and retry consumption priority
-- ✅ SSRF guard test suite; secret encryption and rotation
-- ✅ Load test with a noisy tenant and a hanging endpoint; recorded results
+- ⬜ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier
+- ⬜ Sharded fresh lanes, separation of fresh and retry consumption priority
+- ✅ SSRF guard test suite
+- ⬜ Secret encryption and rotation
+- ⬜ Load test with a noisy tenant and a hanging endpoint; recorded results
 
 **Validation:** isolation criterion met with numbers; breaker open and recover observed; SSRF suite green.
 
@@ -372,10 +376,10 @@ Regression-catching examples: "same `Idempotency-Key` twice yields one event" fa
 
 **Deliverables**
 
-- ✅ React dashboard: endpoints and subscriptions, virtualized infinite delivery log with filters, live updates ("N new" pill), replay and cancellable bulk replay (Redux-saga)
-- ✅ Dashboard gateway with per-tenant bindings and RxJS batching
-- ✅ Prometheus metrics, structured logs with correlation ids
-- ✅ README with architecture, decisions, scale-up table, measured results, and the demo script; optional GitLab CI and k3s notes as the next step
+- ⬜ React dashboard: endpoints and subscriptions, virtualized infinite delivery log with filters, live updates ("N new" pill), replay and cancellable bulk replay (Redux-saga)
+- ⬜ Dashboard gateway with per-tenant bindings and RxJS batching
+- ⬜ Prometheus metrics, structured logs with correlation ids
+- ⬜ README with architecture, decisions, scale-up table, measured results, and the demo script; optional GitLab CI and k3s notes as the next step
 
 **Validation:** all three demo scenes run end to end; `explain()` outputs saved for the log queries; README results table complete.
 
