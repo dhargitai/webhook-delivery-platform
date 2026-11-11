@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isBlockedAddress } from './ssrf-guard.js';
+import type { LookupAddress } from 'node:dns';
+import {
+  isBlockedAddress,
+  SsrfBlockedError,
+  SsrfGuard,
+  type HostResolver,
+} from './ssrf-guard.js';
 
 describe('isBlockedAddress', () => {
   describe('blocks every deny-list category', () => {
@@ -125,4 +131,179 @@ describe('isBlockedAddress', () => {
       expect(() => isBlockedAddress(value)).toThrow(TypeError);
     },
   );
+});
+
+const PUBLIC: LookupAddress = { address: '93.184.216.34', family: 4 };
+const PRIVATE: LookupAddress = { address: '10.0.0.5', family: 4 };
+const METADATA: LookupAddress = { address: '169.254.169.254', family: 4 };
+
+/** A resolver that answers each call from the script, in order. */
+function scripted(...answers: LookupAddress[][]): HostResolver & {
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const resolve: HostResolver = (hostname) => {
+    calls.push(hostname);
+    const answer = answers[calls.length - 1];
+    if (answer === undefined) throw new Error('resolver called too often');
+    return Promise.resolve(answer);
+  };
+  return Object.assign(resolve, { calls });
+}
+
+/** Calls the guard the way Node does without `all`: one address back. */
+function lookupOne(guard: SsrfGuard, hostname: string) {
+  return new Promise<{ address: string; family?: number }>(
+    (resolve, reject) => {
+      guard.lookup(hostname, {}, (error, address, family) => {
+        if (error) return reject(error);
+        if (typeof address !== 'string') {
+          return reject(new Error('expected a single address'));
+        }
+        resolve({ address, family });
+      });
+    },
+  );
+}
+
+/** Calls the guard the way a happy-eyeballs connect does: `all: true`. */
+function lookupAll(guard: SsrfGuard, hostname: string) {
+  return new Promise<LookupAddress[]>((resolve, reject) => {
+    guard.lookup(hostname, { all: true }, (error, addresses) => {
+      if (error) return reject(error);
+      if (typeof addresses === 'string') {
+        return reject(new Error('expected a list of addresses'));
+      }
+      resolve(addresses);
+    });
+  });
+}
+
+describe('SsrfGuard.lookup', () => {
+  it('refuses a name that resolves to a blocked address, and says why', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([METADATA]) });
+
+    const refused = lookupOne(guard, 'metadata.evil.test');
+
+    await expect(refused).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(refused).rejects.toMatchObject({ code: 'ESSRF' });
+    await expect(refused).rejects.toThrow(/169\.254\.169\.254.*link-local/);
+  });
+
+  it('refuses the whole lookup when only one of several answers is blocked', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([PUBLIC, PRIVATE]) });
+
+    await expect(lookupAll(guard, 'mixed.test')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    );
+  });
+
+  it('refuses when the blocked answer comes first too', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([PRIVATE, PUBLIC]) });
+
+    await expect(lookupOne(guard, 'mixed.test')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    );
+  });
+
+  it('checks again on every lookup, so a DNS rebind is caught', async () => {
+    // The name is public for the first connection and private for the second.
+    const resolver = scripted([PUBLIC], [PRIVATE]);
+    const guard = new SsrfGuard({ resolve: resolver });
+
+    await expect(lookupOne(guard, 'rebind.test')).resolves.toEqual({
+      address: PUBLIC.address,
+      family: 4,
+    });
+    await expect(lookupOne(guard, 'rebind.test')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    );
+    expect(resolver.calls).toEqual(['rebind.test', 'rebind.test']);
+  });
+
+  it('returns exactly the address it checked, with its family', async () => {
+    const v6: LookupAddress = { address: '2606:4700::1111', family: 6 };
+    const guard = new SsrfGuard({ resolve: scripted([v6]) });
+
+    await expect(lookupOne(guard, 'v6.test')).resolves.toEqual({
+      address: '2606:4700::1111',
+      family: 6,
+    });
+  });
+
+  it('returns exactly the checked list, in order, when asked for all', async () => {
+    const v6: LookupAddress = { address: '2606:4700::1111', family: 6 };
+    const guard = new SsrfGuard({ resolve: scripted([v6, PUBLIC]) });
+
+    await expect(lookupAll(guard, 'dual.test')).resolves.toEqual([v6, PUBLIC]);
+  });
+
+  it('passes a resolver failure through as it is', async () => {
+    const failure = Object.assign(
+      new Error('getaddrinfo ENOTFOUND gone.test'),
+      {
+        code: 'ENOTFOUND',
+      },
+    );
+    const guard = new SsrfGuard({ resolve: () => Promise.reject(failure) });
+
+    await expect(lookupOne(guard, 'gone.test')).rejects.toBe(failure);
+  });
+
+  it('fails a name that resolves to nothing instead of returning nothing', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([]) });
+
+    await expect(lookupOne(guard, 'empty.test')).rejects.toMatchObject({
+      code: 'ENOTFOUND',
+    });
+  });
+
+  describe('allowHosts', () => {
+    const LOOPBACK: LookupAddress = { address: '127.0.0.1', family: 4 };
+
+    it('is off by default: the same host is blocked without it', async () => {
+      const guard = new SsrfGuard({ resolve: scripted([LOOPBACK]) });
+
+      await expect(lookupOne(guard, 'mock-receiver')).rejects.toBeInstanceOf(
+        SsrfBlockedError,
+      );
+    });
+
+    it('lets an allowlisted host through, still pinned to what it resolved to', async () => {
+      const guard = new SsrfGuard({
+        resolve: scripted([LOOPBACK]),
+        allowHosts: ['mock-receiver'],
+      });
+
+      await expect(lookupOne(guard, 'mock-receiver')).resolves.toEqual({
+        address: '127.0.0.1',
+        family: 4,
+      });
+    });
+
+    it('matches whole names without regard to case', async () => {
+      const guard = new SsrfGuard({
+        resolve: scripted([LOOPBACK]),
+        allowHosts: ['Mock-Receiver'],
+      });
+
+      await expect(lookupOne(guard, 'MOCK-receiver')).resolves.toMatchObject({
+        address: '127.0.0.1',
+      });
+    });
+
+    it.each(['mock-receiver.evil.test', 'evil-mock-receiver', 'receiver'])(
+      'does not extend to %s',
+      async (hostname) => {
+        const guard = new SsrfGuard({
+          resolve: scripted([LOOPBACK]),
+          allowHosts: ['mock-receiver'],
+        });
+
+        await expect(lookupOne(guard, hostname)).rejects.toBeInstanceOf(
+          SsrfBlockedError,
+        );
+      },
+    );
+  });
 });

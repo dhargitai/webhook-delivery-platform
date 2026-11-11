@@ -1,4 +1,6 @@
-import { BlockList, isIP } from 'node:net';
+import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { promisify } from 'node:util';
 
 interface Category {
   /** What the developer is told, e.g. "link-local". */
@@ -114,4 +116,100 @@ function expandIpv6(address: string): number[] {
     () => '0',
   );
   return [...before, ...fill, ...after].map((group) => parseInt(group, 16));
+}
+
+/** Resolves a host name to every address it currently has. */
+export type HostResolver = (
+  hostname: string,
+) => Promise<readonly LookupAddress[]>;
+
+const resolveAll = promisify(dnsLookup);
+const resolveWithDns: HostResolver = (hostname) =>
+  resolveAll(hostname, { all: true });
+
+/**
+ * A connection was refused because the host resolves to an address that is not
+ * public. The `code` lets the HTTP client tell it from a plain network error.
+ */
+export class SsrfBlockedError extends Error {
+  readonly code = 'ESSRF';
+
+  constructor(
+    readonly hostname: string,
+    readonly address: string,
+    readonly reason: string,
+  ) {
+    super(`${hostname} resolves to ${address}, which is ${reason}`);
+    this.name = 'SsrfBlockedError';
+  }
+}
+
+export interface SsrfGuardOptions {
+  /** Where names are resolved. Defaults to the system resolver. */
+  resolve?: HostResolver;
+  /**
+   * Hosts exempt from the deny-list, compared as whole names, case-insensitively.
+   * For development only: it is what lets the Compose mock receiver, which sits
+   * on a private address, be called. Empty in production.
+   */
+  allowHosts?: readonly string[];
+}
+
+/**
+ * The connect-time SSRF guard. Its `lookup` plugs into `SafeHttpClient`: the
+ * client connects to whatever `lookup` returns, so resolving, checking and
+ * returning the same addresses pins the connection to what was checked. The
+ * Host header and the TLS server name still come from the URL, so they stay
+ * right. Nothing is cached: a name that changes its answer between two
+ * deliveries (DNS rebinding) is checked afresh each time.
+ */
+export class SsrfGuard {
+  private readonly resolve: HostResolver;
+  private readonly allowHosts: ReadonlySet<string>;
+
+  constructor({
+    resolve = resolveWithDns,
+    allowHosts = [],
+  }: SsrfGuardOptions = {}) {
+    this.resolve = resolve;
+    this.allowHosts = new Set(allowHosts.map((host) => host.toLowerCase()));
+  }
+
+  readonly lookup: LookupFunction = (hostname, options, callback) => {
+    void this.resolveChecked(hostname).then(
+      (addresses) => {
+        const [first] = addresses;
+        if (options.all || first === undefined) {
+          callback(null, [...addresses]);
+        } else {
+          callback(null, first.address, first.family);
+        }
+      },
+      (error: unknown) => {
+        callback(error instanceof Error ? error : new Error(String(error)), '');
+      },
+    );
+  };
+
+  /** The addresses of the host, all of them checked. Throws if any is blocked. */
+  private async resolveChecked(
+    hostname: string,
+  ): Promise<readonly LookupAddress[]> {
+    const addresses = await this.resolve(hostname);
+    if (addresses.length === 0) {
+      throw Object.assign(new Error(`${hostname} has no address`), {
+        code: 'ENOTFOUND',
+      });
+    }
+    if (this.allowHosts.has(hostname.toLowerCase())) return addresses;
+    // One blocked address refuses the host: using only the others would let a
+    // name with mixed records reach the private one on a retry of the connect.
+    for (const { address } of addresses) {
+      const reason = isBlockedAddress(address);
+      if (reason !== undefined) {
+        throw new SsrfBlockedError(hostname, address, reason);
+      }
+    }
+    return addresses;
+  }
 }

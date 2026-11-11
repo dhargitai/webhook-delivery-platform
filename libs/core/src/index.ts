@@ -24,6 +24,13 @@ export {
 } from './api-key.js';
 export { SignatureService } from './signature-service.js';
 export {
+  isBlockedAddress,
+  SsrfBlockedError,
+  SsrfGuard,
+  type HostResolver,
+  type SsrfGuardOptions,
+} from './ssrf-guard.js';
+export {
   SafeHttpClient,
   type HttpFailureKind,
   type HttpResult,
