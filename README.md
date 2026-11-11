@@ -246,6 +246,8 @@ The dispatcher reads `DATABASE_URL`, `RABBITMQ_URL` and `BROKER_NAMESPACE` too, 
 | `LANE_COUNT` | `4` | Number of fresh-delivery lanes (16 in the design). Changing it remaps endpoints to lanes, so drain the queues first |
 | `DISPATCHER_PREFETCH` | `20` | Events handled at once |
 | `DISPATCHER_CONFIRM_TIMEOUT_MS` | `5000` | How long to wait for the broker's confirm |
+| `DISPATCHER_RETRY_DELAY_MS` | `5000` | How long a failed dispatch waits in the retry queue before the next try. Part of the queue's name (`<ns>.dispatch.retry.<ms>`), so changing it makes a new queue |
+| `DISPATCHER_MAX_ATTEMPTS` | `10` | Dispatch tries per event, the first included. After the last, the event is dead-lettered with `x-failure-kind` and `x-failure-reason` headers |
 
 The PRD locks further parameters, which become environment variables as each feature lands:
 

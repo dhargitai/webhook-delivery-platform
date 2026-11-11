@@ -17,13 +17,17 @@ import {
   type BrokerConnection,
   ConfirmPublisher,
   Consumer,
+  declareDispatchRetryTopology,
   declareTopology,
   MalformedMessageError,
+  RequeueError,
 } from '@wdp/messaging';
 import type { ConsumeMessage } from 'amqplib';
 import { Kysely } from 'kysely';
 import { BrokerDeliveryPublisher } from './broker-delivery-publisher.js';
+import { BrokerDispatchRetryPublisher } from './broker-dispatch-retry-publisher.js';
 import { dispatcherConfig } from './config/dispatcher.config.js';
+import { DispatchFailureHandler } from './dispatch-failure-handler.js';
 import { EventMessageHandler } from './event-message-handler.js';
 import { BROKER, DATABASE } from './tokens.js';
 
@@ -55,6 +59,10 @@ export class DispatcherRunner
       laneCount: this.config.laneCount,
       namespace: this.config.brokerNamespace,
     });
+    await declareDispatchRetryTopology(setup, {
+      delayMs: this.config.retryDelayMs,
+      namespace: this.config.brokerNamespace,
+    });
     await setup.close();
 
     // Separate channels: the prefetch limit belongs to the consuming channel,
@@ -63,17 +71,40 @@ export class DispatcherRunner
     const consumeChannel = await this.broker.createChannel();
     this.channels.push(publishChannel, consumeChannel);
 
-    const handler = new EventMessageHandler(
-      new Dispatcher(
-        new KyselySubscriptionLookup(this.db),
-        new BrokerDeliveryPublisher(
-          new ConfirmPublisher(publishChannel, {
-            confirmTimeoutMs: this.config.confirmTimeoutMs,
-          }),
-          names,
+    // One publisher for jobs and for parked events: both need a confirm
+    // before the message they belong to is acked.
+    const confirmed = new ConfirmPublisher(publishChannel, {
+      confirmTimeoutMs: this.config.confirmTimeoutMs,
+    });
+    const handler = new DispatchFailureHandler(
+      new EventMessageHandler(
+        new Dispatcher(
+          new KyselySubscriptionLookup(this.db),
+          new BrokerDeliveryPublisher(confirmed, names),
+          new LaneRouter(this.config.laneCount),
         ),
-        new LaneRouter(this.config.laneCount),
       ),
+      new BrokerDispatchRetryPublisher(
+        confirmed,
+        names,
+        this.config.retryDelayMs,
+      ),
+      {
+        maxAttempts: this.config.maxAttempts,
+        onRetryScheduled: (message, nextAttempt, error) =>
+          this.logger.warn('event dispatch failed, will be retried', {
+            event_id: message.properties.correlationId,
+            attempt: nextAttempt,
+            retry_in_ms: this.config.retryDelayMs,
+            error: errorText(error),
+          }),
+        onExhausted: (message, attempts, error) =>
+          this.logger.error('event dispatch failed for good, dead-lettered', {
+            event_id: message.properties.correlationId,
+            attempt: attempts,
+            error: errorText(error),
+          }),
+      },
     );
 
     this.consumer = await Consumer.start(
@@ -81,10 +112,12 @@ export class DispatcherRunner
       names.dispatchQueue,
       async (message) => {
         const jobs = await handler.handle(message);
-        this.logger.debug('event dispatched', {
-          eventId: message.properties.correlationId,
-          jobs,
-        });
+        if (jobs !== undefined) {
+          this.logger.debug('event dispatched', {
+            event_id: message.properties.correlationId,
+            jobs,
+          });
+        }
       },
       {
         prefetch: this.config.prefetch,
@@ -108,20 +141,38 @@ export class DispatcherRunner
     await this.db.destroy();
   }
 
+  /**
+   * Only a handler that threw reaches here, and the consumer rejected the
+   * message for it: a malformed one is dead-lettered for good, and a
+   * `RequeueError` went back to the queue. Failed dispatches are logged by the
+   * handler's own callbacks.
+   */
   private report(error: unknown, message: ConsumeMessage): void {
     const messageId = message.properties.messageId;
     if (error instanceof MalformedMessageError) {
       // Rejected, so it is in the dead-letter queue, but no retry could help.
       this.logger.warn('malformed event message dead-lettered', {
-        messageId,
+        message_id: messageId,
         reason: error.message,
       });
       return;
     }
-    // Rejected too: the event waits in the dead-letter queue for replay.
-    this.logger.error('event dead-lettered after a failed dispatch', {
-      messageId,
-      error: error instanceof Error ? error.stack : String(error),
+    if (error instanceof RequeueError) {
+      this.logger.error('could not park a failed event, requeued it', {
+        message_id: messageId,
+        error: errorText(error.cause ?? error),
+      });
+      return;
+    }
+    this.logger.error('unexpected error while handling an event', {
+      message_id: messageId,
+      error: errorText(error),
     });
   }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error
+    ? (error.stack ?? error.message)
+    : String(error);
 }
