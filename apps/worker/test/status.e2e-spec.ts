@@ -10,6 +10,10 @@ describe('worker status (e2e)', () => {
     // The config module validates the environment while worker.module.ts is
     // evaluated, so the import comes after the environment is set.
     process.env.PORT = '3001';
+    // Required by the config schema; nothing connects before the worker
+    // consumes the lanes.
+    process.env.DATABASE_URL = 'postgres://unused:unused@localhost:5432/unused';
+    process.env.RABBITMQ_URL = 'amqp://unused:unused@localhost:5672';
     const { WorkerModule } = await import('../src/worker.module.js');
     const moduleRef = await Test.createTestingModule({
       imports: [WorkerModule],
