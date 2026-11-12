@@ -3,3 +3,4 @@
 export const DATABASE = Symbol('DATABASE');
 export const BROKER = Symbol('BROKER');
 export const MONGO = Symbol('MONGO');
+export const REDIS = Symbol('REDIS');

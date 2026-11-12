@@ -5,6 +5,7 @@ import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
 import type { BrokerConnection } from '@wdp/messaging';
 import { eventually } from '@wdp/messaging/testing';
 import { type Kysely, sql } from 'kysely';
+import type { Redis } from 'ioredis';
 import type { MongoClient } from 'mongodb';
 import pg from 'pg';
 import {
@@ -20,12 +21,14 @@ import {
 import { BrokerModule } from './broker.module.js';
 import { DatabaseModule } from './database.module.js';
 import { MongoModule } from './mongo.module.js';
-import { BROKER, DATABASE, MONGO } from './tokens.js';
+import { RedisModule } from './redis.module.js';
+import { BROKER, DATABASE, MONGO, REDIS } from './tokens.js';
 
 interface TestConfig {
   databaseUrl: string;
   rabbitmqUrl: string;
   mongoUrl: string;
+  redisUrl: string;
 }
 
 /** Stands in for an app's config namespace, as the factories' only input. */
@@ -43,6 +46,7 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
       databaseUrl: testDb.url,
       rabbitmqUrl: inject('rabbitUrl'),
       mongoUrl: inject('mongoUrl'),
+      redisUrl: inject('redisUrl'),
     };
   });
 
@@ -79,6 +83,11 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
     MongoModule.forRootAsync({
       inject: [CONFIG],
       url: (c: TestConfig) => c.mongoUrl,
+    });
+  const redis = () =>
+    RedisModule.forRootAsync({
+      inject: [CONFIG],
+      url: (c: TestConfig) => c.redisUrl,
     });
 
   async function start(...imports: DynamicModule[]): Promise<TestingModule> {
@@ -160,15 +169,56 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
     await closed;
   });
 
+  it('closes the Redis client when the app shuts down', async () => {
+    const client = (await start(redis())).get<Redis>(REDIS);
+    expect(await client.ping()).toBe('PONG');
+
+    await app?.close();
+    app = undefined;
+
+    expect(client.status).toBe('end');
+    await expect(client.ping()).rejects.toThrow();
+  });
+
+  it('logs an unreachable Redis, then shuts down and stops reconnecting', async () => {
+    // Silenced: the errors are expected, and would clutter the run.
+    const logged = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    const reachable = config;
+    // Nothing listens on port 1, so every connection attempt is refused.
+    config = { ...config, redisUrl: 'redis://127.0.0.1:1' };
+    try {
+      await start(redis());
+
+      await eventually(() => {
+        expect(logged).toHaveBeenCalledWith(
+          'redis connection error',
+          expect.any(String),
+        );
+      });
+
+      await app?.close();
+      app = undefined;
+      // ioredis retries after 50 ms, then 100 ms, ...: a client still
+      // reconnecting would log again well within this wait.
+      const errorsAtClose = logged.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(logged.mock.calls.length).toBe(errorsAtClose);
+    } finally {
+      config = reachable;
+    }
+  });
+
   it('makes the connections injectable from any module', async () => {
     const USES = Symbol('USES');
     class ConsumerModule {}
-    const moduleRef = await start(database(), broker(), mongo(), {
+    const moduleRef = await start(database(), broker(), mongo(), redis(), {
       module: ConsumerModule,
       providers: [
         {
           provide: USES,
-          inject: [DATABASE, BROKER, MONGO],
+          inject: [DATABASE, BROKER, MONGO, REDIS],
           useFactory: (...connections: unknown[]) => connections,
         },
       ],
@@ -176,9 +226,10 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
 
     const connections = moduleRef.get<unknown[]>(USES);
 
-    expect(connections).toHaveLength(3);
+    expect(connections).toHaveLength(4);
     expect(connections[0]).toBe(moduleRef.get(DATABASE));
     expect(connections[1]).toBe(moduleRef.get(BROKER));
     expect(connections[2]).toBe(moduleRef.get(MONGO));
+    expect(connections[3]).toBe(moduleRef.get(REDIS));
   });
 });
