@@ -1,7 +1,7 @@
 **Status:** Approved
-**Date:** 2026-11-11
+**Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.3
+**Version:** 1.4
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -349,9 +349,9 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 
 **Deliverables**
 
-- ✅ Delivery worker with the SafeHttpClient and signing (it consumes the lanes, signs and POSTs each job; a failed attempt is logged and not retried yet, which needs the retry tiers below)
-- ⬜ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor (the RetryPolicy and the topology are built; the worker that publishes to them is not)
-- ⬜ Correct ack ordering, quorum queues with delivery limit, graceful shutdown (quorum queues and the delivery limit are built; the rest needs the worker)
+- ✅ Delivery worker with the SafeHttpClient and signing (it consumes the lanes, signs and POSTs each job; a failed attempt is retried through the tiers below)
+- ⬜ Retry tier queues with TTL and DLX, `retry.ready` lane, DLQ, time-scale factor (the tiers, `retry.ready` and the time scale are built and used by the worker; a delivery that runs out of attempts is only logged, and the DLQ entry for it is not built)
+- ⬜ Correct ack ordering, quorum queues with delivery limit, graceful shutdown (ack ordering, quorum queues and the delivery limit are built; graceful shutdown is not)
 - ✅ Mongo attempt log with indexes and TTL (the worker writes one document per attempt before it acks; nothing reads it through the API yet)
 
 **Validation:** failing receiver produces the scheduled attempts then a DLQ entry; killed worker loses nothing; retry timestamps are fresh while `webhook-id` is stable.
