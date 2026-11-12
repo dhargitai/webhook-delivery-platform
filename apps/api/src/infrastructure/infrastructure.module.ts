@@ -2,53 +2,48 @@ import {
   Global,
   Inject,
   Injectable,
-  Logger,
   Module,
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { type ConfigType } from '@nestjs/config';
-import { createDatabase, type Database } from '@wdp/core';
+import { DatabaseModule } from '@wdp/common';
 import { Redis } from 'ioredis';
-import { Kysely } from 'kysely';
 import { databaseConfig } from '../config/database.config.js';
 import { redisConfig } from '../config/redis.config.js';
-import { DATABASE, REDIS } from './tokens.js';
+import { REDIS } from './tokens.js';
 
-/** Closes the shared connections when the app shuts down. */
+/** Closes the Redis connection when the app shuts down. */
 @Injectable()
-class ConnectionCloser implements OnApplicationShutdown {
-  constructor(
-    @Inject(DATABASE) private readonly db: Kysely<Database>,
-    @Inject(REDIS) private readonly redis: Redis,
-  ) {}
+class RedisCloser implements OnApplicationShutdown {
+  constructor(@Inject(REDIS) private readonly redis: Redis) {}
 
   async onApplicationShutdown(): Promise<void> {
-    await Promise.all([this.db.destroy(), this.redis.quit()]);
+    await this.redis.quit();
   }
 }
 
+/**
+ * The connections the API's modules share. The database comes from
+ * `@wdp/common` (global `DATABASE`, which also closes it); Redis is the API's
+ * own.
+ */
 @Global()
 @Module({
-  providers: [
-    {
-      provide: DATABASE,
+  imports: [
+    DatabaseModule.forRootAsync({
       inject: [databaseConfig.KEY],
-      useFactory: (config: ConfigType<typeof databaseConfig>) => {
-        const logger = new Logger('Database');
-        return createDatabase(config.url, {
-          onPoolError: (error) =>
-            logger.error('database pool error', error.stack),
-        });
-      },
-    },
+      url: (config: ConfigType<typeof databaseConfig>) => config.url,
+    }),
+  ],
+  providers: [
     {
       provide: REDIS,
       inject: [redisConfig.KEY],
       useFactory: (config: ConfigType<typeof redisConfig>) =>
         new Redis(config.url),
     },
-    ConnectionCloser,
+    RedisCloser,
   ],
-  exports: [DATABASE, REDIS],
+  exports: [REDIS],
 })
 export class InfrastructureModule {}

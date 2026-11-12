@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Database } from '@wdp/core';
 import { type Kysely, sql } from 'kysely';
-import { DATABASE } from '../infrastructure/tokens.js';
+import { DATABASE } from '@wdp/common';
 import {
   type Endpoint,
   EndpointsRepository,
