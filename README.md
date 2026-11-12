@@ -155,7 +155,7 @@ docker compose up --build        # first run builds one image, about a minute an
 docker compose run --rm seed     # creates the "demo" tenant, prints its API key once
 ```
 
-`up` starts Postgres, MongoDB (the attempt log), Redis, RabbitMQ, a one-shot `migrate` that applies the SQL migrations, then the `api` (port 3000), `relay`, `dispatcher`, `worker` (port 3001, delivers the jobs; `GET /status`) and `mock-receiver` (port 4000). The RabbitMQ management UI is at <http://localhost:15672> (login `guest` / `guest`). `docker compose run --rm seed --tenant acme` seeds another tenant; running it again reuses the tenant and issues one more key, and earlier keys keep working.
+`up` starts Postgres, MongoDB (the attempt log), Redis, RabbitMQ, a one-shot `migrate` that applies the SQL migrations, then the `api` (port 3000), `relay`, `dispatcher`, `worker` (port 3001, delivers the jobs; `GET /status`) and `mock-receiver` (port 4000). The RabbitMQ management UI is at <http://localhost:15672> (login `guest` / `guest`). `docker compose run --rm seed --tenant acme` seeds another tenant; running it again reuses the tenant and issues one more key, and earlier keys keep working. The apps restart after a crash or a failed boot (for example a worker started while MongoDB was unreachable comes up once it is back); a service stopped with `docker stop` or `docker compose stop` stays stopped.
 
 The demo path, with the key from `seed` in `$KEY`:
 

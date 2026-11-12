@@ -17,6 +17,16 @@ x-app: &app
     BROKER_NAMESPACE: wdp
     LANE_COUNT: '4'
 
+# The long-running services. Docker restarts them after a crash or a failed
+# boot (a non-zero exit), for example a worker that started while Mongo was
+# unreachable. A container stopped by hand stays stopped. No retry cap: the
+# backoff between restarts doubles, so a crash loop slows down and shows as
+# "Restarting" in `docker compose ps`. The one-shot migrate and seed use
+# *app and are never restarted.
+x-service: &service
+  <<: *app
+  restart: on-failure
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -78,7 +88,7 @@ services:
         condition: service_healthy
 
   api:
-    <<: *app
+    <<: *service
     command: ['node', 'apps/api/dist/main.js']
     environment:
       <<: *env
@@ -107,7 +117,7 @@ services:
       start_period: 10s
 
   relay:
-    <<: *app
+    <<: *service
     command: ['node', 'apps/relay/dist/main.js']
     depends_on:
       postgres:
@@ -118,7 +128,7 @@ services:
         condition: service_completed_successfully
 
   dispatcher:
-    <<: *app
+    <<: *service
     command: ['node', 'apps/dispatcher/dist/main.js']
     depends_on:
       postgres:
@@ -131,7 +141,7 @@ services:
   # The delivery worker: consumes the lane queues, signs each job and POSTs it
   # to the endpoint. It also answers GET /status.
   worker:
-    <<: *app
+    <<: *service
     command: ['node', 'apps/worker/dist/main.js']
     environment:
       <<: *env
@@ -167,7 +177,7 @@ services:
 
   # A stand-in for a customer's endpoint. The worker calls it.
   mock-receiver:
-    <<: *app
+    <<: *service
     command: ['node', 'apps/mock-receiver/dist/main.js']
     environment:
       PORT: '4000'
