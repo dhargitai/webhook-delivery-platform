@@ -49,6 +49,8 @@ describe('first delivery (e2e)', () => {
   let receiverBase: string;
   // Everything that reaches the receiver, whichever path it was called on.
   const received: Received[] = [];
+  // Requests so far per webhook id, for the path that fails before it recovers.
+  const hits = new Map<string, number>();
 
   beforeAll(async () => {
     testDb = await createTestDatabase(inject('postgresAdminUrl'));
@@ -67,6 +69,13 @@ describe('first delivery (e2e)', () => {
           headers: { ...req.headers, 'x-path': req.url ?? '' },
           body: Buffer.concat(chunks).toString(),
         });
+        if (req.url === '/recovering') {
+          // Down for the first two requests of a delivery, then back up.
+          const id = String(req.headers['webhook-id']);
+          const count = (hits.get(id) ?? 0) + 1;
+          hits.set(id, count);
+          res.statusCode = count <= 2 ? 503 : 200;
+        }
         res.end('ok');
       });
     });
@@ -86,6 +95,9 @@ describe('first delivery (e2e)', () => {
     process.env.LANE_COUNT = '4';
     process.env.RELAY_POLL_INTERVAL_MS = '20';
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
+    // The PRD's test settings: retry delays divided by 1000, none below 20 ms.
+    process.env.TIME_SCALE = '1000';
+    process.env.RETRY_MIN_DELAY_MS = '20';
 
     const { AppModule } = await import('../apps/api/src/app.module.js');
     const { configureApp } = await import('../apps/api/src/configure-app.js');
@@ -267,6 +279,36 @@ describe('first delivery (e2e)', () => {
     // Leave time for a wrong delivery to show up.
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(to('/other')).toHaveLength(0);
+  });
+
+  it('retries a failing receiver until it recovers, then stops', async () => {
+    const { tenantId, key } = await seedTenant();
+    const endpoint = await registerEndpoint(key, '/recovering', [
+      'invoice.paid',
+    ]);
+
+    const eventId = await postEvent(key, 'invoice.paid');
+
+    await eventually(() => expect(to('/recovering')).toHaveLength(3), {
+      timeoutMs: 15_000,
+    });
+    // Leave time for an attempt after the success to show up.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(to('/recovering')).toHaveLength(3);
+    // The same id on every try, so the receiver can deduplicate.
+    expect(
+      new Set(to('/recovering').map((r) => r.headers['webhook-id'])),
+    ).toEqual(new Set([deliveryId(eventId, endpoint.id)]));
+    // Every try is in the log under its own number.
+    const logged = await attempts
+      .find({ tenant_id: tenantId, event_id: eventId })
+      .sort({ attempt_no: 1 })
+      .toArray();
+    expect(logged.map((d) => [d['attempt_no'], d['status']])).toEqual([
+      [1, 'failure'],
+      [2, 'failure'],
+      [3, 'success'],
+    ]);
   });
 
   it('delivers once when the same Idempotency-Key is sent twice', async () => {

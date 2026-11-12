@@ -21,6 +21,15 @@ export const envSchema = z.object({
   LANE_COUNT: z.coerce.number().int().positive().default(4),
   // Jobs handled at once per lane (PRD: fresh-lane prefetch 20).
   WORKER_PREFETCH: z.coerce.number().int().positive().default(20),
+  // Retries handled at once, from the one `retry.ready` queue (PRD: 5, so
+  // retries take at most 20% of a worker's concurrency).
+  WORKER_RETRY_PREFETCH: z.coerce.number().int().positive().default(5),
+  // Divides every retry delay: 1 in production, 30 for a demo, 1000 in tests.
+  // Applied when the retry queues are declared, and part of their names.
+  TIME_SCALE: z.coerce.number().positive().finite().default(1),
+  // No retry delay is shorter than this many ms, however large the scale
+  // (PRD: 500 for a demo, 20 in tests).
+  RETRY_MIN_DELAY_MS: z.coerce.number().int().min(0).default(0),
   // Comma-separated hosts the SSRF guard lets through, over plain http and
   // any port. Development only (the Compose mock receiver); empty in
   // production. Same format as the API's.

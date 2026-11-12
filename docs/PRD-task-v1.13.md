@@ -1,8 +1,8 @@
 **Status:** Approved
-**Date:** 2026-11-11
+**Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.12
-**Source PRD:** PRD-v1.3
+**Version:** 1.13
+**Source PRD:** PRD-v1.4
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -268,7 +268,7 @@ Registration resolves the host and rejects disallowed targets with a reason.
 **Blocked by:** Tasks 0, 6, 9, 10, 12
 
 **What to build:**
-The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through the SafeHttpClient and the SSRF guard (one `SsrfGuard` supplies the client's `lookup` and `hostCheck`, with `SSRF_ALLOW_HOSTS` read by the worker), and acks. `webhook-id` is stable and `webhook-timestamp` is regenerated on every attempt. Built as `DeliveryAttempt` and `EndpointTargetLookup` (the worker's read path to an endpoint's url, secret and status, scoped by tenant) in `@wdp/core`, and `JobMessageHandler` and `WorkerRunner` in `apps/worker`. The `webhook-id` is the `delivery_id`; the body is the envelope `{id: event_id, type, data: payload}`, serialised once, so the signed bytes are the sent bytes. The worker consumes every lane, one channel per lane, with `WORKER_PREFETCH` (20) each. A failed attempt (any non-2xx, timeout or SSRF block) and a job for a missing or disabled endpoint are logged and acked, not retried: Task 18 replaces that branch. A malformed job, or an unexpected error such as a failed endpoint lookup, is dead-lettered by the consumer. Compose gives the worker `SSRF_ALLOW_HOSTS` and the same `depends_on` as the dispatcher.
+The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through the SafeHttpClient and the SSRF guard (one `SsrfGuard` supplies the client's `lookup` and `hostCheck`, with `SSRF_ALLOW_HOSTS` read by the worker), and acks. `webhook-id` is stable and `webhook-timestamp` is regenerated on every attempt. Built as `DeliveryAttempt` and `EndpointTargetLookup` (the worker's read path to an endpoint's url, secret and status, scoped by tenant) in `@wdp/core`, and `JobMessageHandler` and `WorkerRunner` in `apps/worker`. The `webhook-id` is the `delivery_id`; the body is the envelope `{id: event_id, type, data: payload}`, serialised once, so the signed bytes are the sent bytes. The worker consumes every lane, one channel per lane, with `WORKER_PREFETCH` (20) each. A failed attempt (any non-2xx, timeout or SSRF block) and a job for a missing or disabled endpoint were logged and acked, not retried: Task 18 replaced that branch. A malformed job, or an unexpected error such as a failed endpoint lookup, is dead-lettered by the consumer. Compose gives the worker `SSRF_ALLOW_HOSTS` and the same `depends_on` as the dispatcher.
 
 **Acceptance Criteria:**
 
@@ -284,7 +284,7 @@ The worker consumes a fresh-lane job, signs it, POSTs it to the receiver through
 **Blocked by:** Task 14
 
 **What to build:**
-Write one attempt document per attempt (status, HTTP code, latency, snippet up to 1 KB, error) with the covered compound indexes and a 30-day TTL. Built as the `AttemptLog` port, `AttemptRecord` and `toAttemptRecord` (the mapping from an outcome) in `@wdp/core`, and `MongoAttemptLog` (`record`, and `ensureIndexes`, which the worker calls at boot before it consumes). The document uses the PRD's snake_case names; `ts` is a `Date` (the TTL needs one) and is when the attempt started. `error` is the failure kind, plus `: <message>` when there is one, and fields an attempt does not have are left out. A skipped attempt (endpoint missing or disabled) made no call and is not logged. `JobMessageHandler` writes the record before the ack, so an acked job is always in the log; a failed write rejects the handler and dead-letters the job until Task 18. `attemptNo` is optional on the job and the message (absent means 1) for Task 18 to set. Every index, the event one included, ends in `ts, _id` descending, so no log query needs a sort stage; the TTL is a separate `ts` index, because a compound index cannot expire. The worker reads `MONGO_URL` and `MONGO_DB` (default `wdp`).
+Write one attempt document per attempt (status, HTTP code, latency, snippet up to 1 KB, error) with the covered compound indexes and a 30-day TTL. Built as the `AttemptLog` port, `AttemptRecord` and `toAttemptRecord` (the mapping from an outcome) in `@wdp/core`, and `MongoAttemptLog` (`record`, and `ensureIndexes`, which the worker calls at boot before it consumes). The document uses the PRD's snake_case names; `ts` is a `Date` (the TTL needs one) and is when the attempt started. `error` is the failure kind, plus `: <message>` when there is one, and fields an attempt does not have are left out. A skipped attempt (endpoint missing or disabled) made no call and is not logged. `JobMessageHandler` writes the record before the ack, so an acked job is always in the log; a failed write rejects the handler and dead-letters the job (Task 18 kept this: an infrastructure error is not retried). `attemptNo` is optional on the job and the message (absent means 1); Task 18 sets it on retries. Every index, the event one included, ends in `ts, _id` descending, so no log query needs a sort stage; the TTL is a separate `ts` index, because a compound index cannot expire. The worker reads `MONGO_URL` and `MONGO_DB` (default `wdp`).
 
 **Acceptance Criteria:**
 
@@ -321,21 +321,21 @@ A pure `next(attempt, rng) -> {action, delay, tier, bucket}` (no `now`: nothing 
 - [x] Against a real broker, a parked job returns to its own fresh lane after the delay
 - [x] A new `TIME_SCALE` creates new queues instead of failing
 
-### Task 18: Failed attempt becomes a retry, with correct ack order ⬜
+### Task 18: Failed attempt becomes a retry, with correct ack order ✅
 
 **Original Story:** 21, 23
 **Scope:** `worker`
 **Blocked by:** Tasks 14, 15, 16, 17
 
 **What to build:**
-On a failed attempt: log it, publish to the retry tier, wait for the confirm, then ack. This replaces Task 14's branch, which only logs a failed attempt and acks it. The PRD's DeliveryStateMachine (`Delivery.recordAttempt`, states pending, in-flight, succeeded, retrying, dead, and the attempt budget) lands here in `@wdp/domain`, and the job carries its attempt number.
+On a failed attempt: log it, publish to the retry tier, wait for the confirm, then ack. This replaces Task 14's branch, which only logged a failed attempt and acked it. The PRD's DeliveryStateMachine (`Delivery.recordAttempt`, states pending, in-flight, succeeded, retrying, dead, and the attempt budget) lands here in `@wdp/domain`, and the job carries its attempt number. Built as `Delivery` (it decides retry or give up from the budget, which is a constructor argument because `@wdp/core` depends on `@wdp/domain`; replay is Task 32) and `IllegalDeliveryTransitionError` in `@wdp/domain`, and `RetryHandler`, `RetryPublisher` and `BrokerRetryPublisher` in `apps/worker`. `RetryPolicy` only picks the tier; if it has none for an attempt the budget allows, the handler throws instead of guessing. A retry is the job with `attemptNo + 1`, published through the default exchange to the tier queue of its delay and confirmed before the ack; the `webhook-id` (the `delivery_id`) is unchanged. A retry that cannot be published throws `RequeueError`, which keeps the original job queued. The worker declares the retry topology from the policy and consumes `retry.ready` with its own prefetch. New settings: `TIME_SCALE` (default 1), `RETRY_MIN_DELAY_MS` (default 0) and `WORKER_RETRY_PREFETCH` (default 5). A failure on the 8th attempt is logged and acked, with no retry: the DLQ entry is Task 19. An infrastructure error (a failed log write or endpoint lookup) still dead-letters the job, as before.
 
 **Acceptance Criteria:**
 
-- [ ] Illegal state transitions are rejected (unit-tested)
-- [ ] A failing receiver produces the scheduled attempts
-- [ ] A worker killed mid-delivery loses no job and the receiver sees the same `webhook-id`
-- [ ] The test fails if the ack happens before the retry publish
+- [x] Illegal state transitions are rejected (unit-tested)
+- [x] A failing receiver produces the scheduled attempts
+- [x] A worker killed mid-delivery loses no job and the receiver sees the same `webhook-id`
+- [x] The test fails if the ack happens before the retry publish
 
 ### Task 19: Exhausted deliveries land in the DLQ ⬜
 
