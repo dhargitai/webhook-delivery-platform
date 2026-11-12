@@ -20,6 +20,7 @@ describe('worker status (e2e)', () => {
     process.env.RABBITMQ_URL = inject('rabbitUrl');
     process.env.BROKER_NAMESPACE = testingNamespace();
     process.env.MONGO_URL = inject('mongoUrl');
+    process.env.REDIS_URL = inject('redisUrl');
     process.env.MONGO_DB = `wdp_test_${randomUUID().replaceAll('-', '')}`;
     const { WorkerModule } = await import('../src/worker.module.js');
     const moduleRef = await Test.createTestingModule({

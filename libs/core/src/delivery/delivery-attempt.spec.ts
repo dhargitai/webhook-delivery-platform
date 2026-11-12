@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type {
+  BreakerDecision,
+  BreakerOutcome,
+  EndpointCircuit,
+} from '../circuit-breaker.js';
 import type { DeliveryJob } from '../dispatch/delivery-publisher.js';
 import { generateEndpointSecret } from '../endpoint-secret.js';
 import type { HttpFailureKind, HttpResult } from '../safe-http-client.js';
@@ -27,6 +32,29 @@ class FakeLookup extends EndpointTargetLookup {
     this.asked.push({ tenantId, endpointId });
     if (this.failWith) throw this.failWith;
     return this.targets.get(`${tenantId}/${endpointId}`) ?? null;
+  }
+}
+
+class FakeCircuit implements EndpointCircuit {
+  decision: BreakerDecision = { kind: 'allow' };
+  readonly asked: string[] = [];
+  readonly recorded: {
+    endpointId: string;
+    outcome: BreakerOutcome;
+    probeToken?: string;
+  }[] = [];
+
+  async allow(endpointId: string): Promise<BreakerDecision> {
+    this.asked.push(endpointId);
+    return this.decision;
+  }
+
+  async record(
+    endpointId: string,
+    outcome: BreakerOutcome,
+    probeToken?: string,
+  ): Promise<void> {
+    this.recorded.push({ endpointId, outcome, probeToken });
   }
 }
 
@@ -63,6 +91,7 @@ describe('DeliveryAttempt', () => {
   const signatures = new SignatureService();
   let lookup: FakeLookup;
   let client: RecordingClient;
+  let breaker: FakeCircuit;
   let clock: Date;
   let delivery: DeliveryAttempt;
 
@@ -74,10 +103,12 @@ describe('DeliveryAttempt', () => {
       status: 'active',
     });
     client = new RecordingClient();
+    breaker = new FakeCircuit();
     clock = new Date('2026-11-11T12:00:00.500Z');
     delivery = new DeliveryAttempt({
       lookup,
       client,
+      breaker,
       signatures,
       now: () => clock,
     });
@@ -286,5 +317,138 @@ describe('DeliveryAttempt', () => {
 
     await expect(delivery.attempt(job)).rejects.toThrow('database is down');
     expect(client.sent).toHaveLength(0);
+  });
+
+  describe('the circuit breaker', () => {
+    it('does not call an endpoint whose circuit is open, and defers the job', async () => {
+      breaker.decision = { kind: 'deny' };
+
+      expect(await delivery.attempt(job)).toEqual({
+        kind: 'deferred',
+        reason: 'circuit_open',
+      });
+      expect(client.sent).toHaveLength(0);
+      expect(breaker.recorded).toEqual([]);
+    });
+
+    it('asks about the job’s endpoint', async () => {
+      await delivery.attempt(job);
+
+      expect(breaker.asked).toEqual(['endpoint-1']);
+    });
+
+    it('calls an allowed endpoint and records the result for it, with no token', async () => {
+      await delivery.attempt(job);
+
+      expect(client.sent).toHaveLength(1);
+      expect(breaker.recorded).toEqual([
+        { endpointId: 'endpoint-1', outcome: 'success', probeToken: undefined },
+      ]);
+    });
+
+    it('calls the endpoint as the probe and records the result with the probe’s token', async () => {
+      breaker.decision = { kind: 'probe', token: 'token-1' };
+      client.result = { outcome: 'failed', kind: 'timeout', latencyMs: 10_000 };
+
+      await delivery.attempt(job);
+
+      expect(client.sent).toHaveLength(1);
+      expect(breaker.recorded).toEqual([
+        { endpointId: 'endpoint-1', outcome: 'failure', probeToken: 'token-1' },
+      ]);
+    });
+
+    it.each<{ name: string; result: HttpResult; outcome: BreakerOutcome }>([
+      {
+        name: 'a 503',
+        result: {
+          outcome: 'failed',
+          kind: 'http_error',
+          status: 503,
+          latencyMs: 5,
+        },
+        outcome: 'failure',
+      },
+      {
+        name: 'a 429',
+        result: {
+          outcome: 'failed',
+          kind: 'http_error',
+          status: 429,
+          latencyMs: 5,
+        },
+        outcome: 'failure',
+      },
+      {
+        name: 'a timeout',
+        result: { outcome: 'failed', kind: 'timeout', latencyMs: 10_000 },
+        outcome: 'failure',
+      },
+      {
+        name: 'an SSRF block',
+        result: { outcome: 'failed', kind: 'ssrf_blocked', latencyMs: 1 },
+        outcome: 'failure',
+      },
+      {
+        name: 'a 2xx',
+        result: { outcome: 'success', status: 204, latencyMs: 5, snippet: '' },
+        outcome: 'success',
+      },
+      {
+        name: 'a 404',
+        result: {
+          outcome: 'failed',
+          kind: 'http_error',
+          status: 404,
+          latencyMs: 5,
+        },
+        outcome: 'success',
+      },
+      {
+        name: 'a redirect',
+        result: {
+          outcome: 'failed',
+          kind: 'redirect',
+          status: 302,
+          latencyMs: 5,
+        },
+        outcome: 'success',
+      },
+    ])('records $name as a breaker $outcome', async ({ result, outcome }) => {
+      client.result = result;
+
+      await delivery.attempt(job);
+
+      expect(breaker.recorded.map((r) => r.outcome)).toEqual([outcome]);
+    });
+
+    it('does not consult the breaker for a missing endpoint', async () => {
+      lookup.targets.clear();
+
+      await delivery.attempt(job);
+
+      expect(breaker.asked).toEqual([]);
+      expect(breaker.recorded).toEqual([]);
+    });
+
+    it('does not consult the breaker for a disabled endpoint', async () => {
+      lookup.targets.set('tenant-1/endpoint-1', {
+        url: 'https://hooks.acme.test/in',
+        signingSecret: secret,
+        status: 'disabled',
+      });
+
+      await delivery.attempt(job);
+
+      expect(breaker.asked).toEqual([]);
+      expect(breaker.recorded).toEqual([]);
+    });
+
+    it('does not consult the breaker when the lookup fails', async () => {
+      lookup.failWith = new Error('database is down');
+
+      await expect(delivery.attempt(job)).rejects.toThrow('database is down');
+      expect(breaker.asked).toEqual([]);
+    });
   });
 });

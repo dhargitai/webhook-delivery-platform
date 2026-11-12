@@ -12,6 +12,8 @@ import {
   type AttemptOutcome,
   type Database,
   DeliveryAttempt,
+  type EndpointCircuit,
+  FailOpenCircuitBreaker,
   KyselyEndpointTargetLookup,
   LaneRouter,
   MAX_ATTEMPTS,
@@ -35,7 +37,7 @@ import { BrokerRetryPublisher } from './broker-retry-publisher.js';
 import { workerConfig } from './config/worker.config.js';
 import { JobMessageHandler } from './job-message-handler.js';
 import { type RetryHandled, RetryHandler } from './retry-handler.js';
-import { ATTEMPT_LOG } from './tokens.js';
+import { ATTEMPT_LOG, CIRCUIT_BREAKER } from './tokens.js';
 
 /**
  * Owns the worker's lifecycle. Nest runs each shutdown phase for the whole app
@@ -56,6 +58,7 @@ export class WorkerRunner
     @Inject(DATABASE) private readonly db: Kysely<Database>,
     @Inject(BROKER) private readonly broker: BrokerConnection,
     @Inject(ATTEMPT_LOG) private readonly attemptLog: MongoAttemptLog,
+    @Inject(CIRCUIT_BREAKER) private readonly breaker: EndpointCircuit,
     @Inject(workerConfig.KEY)
     private readonly config: ConfigType<typeof workerConfig>,
   ) {}
@@ -85,6 +88,17 @@ export class WorkerRunner
     // One guard supplies both checks: the connect-time lookup for names and
     // the host check for IP literals, which never reach the lookup.
     const guard = new SsrfGuard({ allowHosts: this.config.ssrfAllowHosts });
+    // A Redis error never stops a delivery: the call goes ahead as if the
+    // circuit were closed, and the error is logged.
+    const breaker = new FailOpenCircuitBreaker(
+      this.breaker,
+      (error, { operation, endpointId }) =>
+        this.logger.warn('circuit breaker unavailable, failing open', {
+          endpoint_id: endpointId,
+          operation,
+          error: errorText(error),
+        }),
+    );
     // A failed attempt is logged, then its retry is published and confirmed,
     // and only then does the consumer ack (see `RetryHandler`).
     const retryChannel = await this.broker.createConfirmChannel();
@@ -97,6 +111,7 @@ export class WorkerRunner
             lookup: guard.lookup,
             hostCheck: (hostname) => guard.blockedHostReason(hostname),
           }),
+          breaker,
           signatures: new SignatureService(),
           now: () => new Date(),
         }),

@@ -1,12 +1,20 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, type ConfigType } from '@nestjs/config';
-import { BrokerModule, DatabaseModule, MONGO, MongoModule } from '@wdp/common';
-import { MongoAttemptLog } from '@wdp/core';
+import {
+  BrokerModule,
+  DatabaseModule,
+  MONGO,
+  MongoModule,
+  REDIS,
+  RedisModule,
+} from '@wdp/common';
+import { CircuitBreaker, MongoAttemptLog } from '@wdp/core';
+import type { Redis } from 'ioredis';
 import type { MongoClient } from 'mongodb';
 import { envSchema } from './config/env.schema.js';
 import { workerConfig } from './config/worker.config.js';
 import { StatusController } from './status.controller.js';
-import { ATTEMPT_LOG } from './tokens.js';
+import { ATTEMPT_LOG, CIRCUIT_BREAKER } from './tokens.js';
 import { WorkerRunner } from './worker-runner.js';
 
 @Module({
@@ -32,6 +40,12 @@ import { WorkerRunner } from './worker-runner.js';
       inject: [workerConfig.KEY],
       url: (config: ConfigType<typeof workerConfig>) => config.mongoUrl,
     }),
+    // Not checked at boot: the breaker fails open, so the worker delivers
+    // while Redis is unreachable, only without the circuit's protection.
+    RedisModule.forRootAsync({
+      inject: [workerConfig.KEY],
+      url: (config: ConfigType<typeof workerConfig>) => config.redisUrl,
+    }),
   ],
   controllers: [StatusController],
   providers: [
@@ -43,6 +57,13 @@ import { WorkerRunner } from './worker-runner.js';
         config: ConfigType<typeof workerConfig>,
       ) =>
         new MongoAttemptLog(client.db(config.mongoDb).collection('attempts')),
+    },
+    {
+      provide: CIRCUIT_BREAKER,
+      inject: [REDIS],
+      // The PRD's thresholds and durations, in every environment: they are
+      // not scaled with TIME_SCALE.
+      useFactory: (redis: Redis) => new CircuitBreaker(redis),
     },
     WorkerRunner,
   ],

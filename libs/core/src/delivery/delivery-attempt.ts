@@ -1,3 +1,4 @@
+import { breakerOutcome, type EndpointCircuit } from '../circuit-breaker.js';
 import type { DeliveryJob } from '../dispatch/delivery-publisher.js';
 import type { HttpFailureKind, HttpResult } from '../safe-http-client.js';
 import type { SignatureService } from '../signature-service.js';
@@ -27,14 +28,17 @@ export interface DeliveryAttemptDeps {
       body: string,
     ): Promise<HttpResult>;
   };
+  /** The endpoint's circuit: asked before the call, told its result after. */
+  breaker: EndpointCircuit;
   signatures: SignatureService;
   now: () => Date;
 }
 
 /**
- * One try at delivering one job: read the endpoint, sign the event and POST
- * it. It decides nothing about what a failure means (retry, give up); it only
- * reports what happened, so that policy can change without touching it.
+ * One try at delivering one job: read the endpoint, ask its circuit, sign the
+ * event and POST it, then tell the circuit how the call went. It decides
+ * nothing about what a failure means (retry, give up); it only reports what
+ * happened, so that policy can change without touching it.
  */
 export class DeliveryAttempt {
   constructor(private readonly deps: DeliveryAttemptDeps) {}
@@ -46,6 +50,13 @@ export class DeliveryAttempt {
     if (!target) return { kind: 'skipped', reason: 'endpoint_missing' };
     if (target.status !== 'active') {
       return { kind: 'skipped', reason: 'endpoint_disabled' };
+    }
+
+    // Asked only once a call is sure to follow: a probe elected for a job
+    // that is then skipped would hold the election without testing anything.
+    const decision = await this.deps.breaker.allow(job.endpointId);
+    if (decision.kind === 'deny') {
+      return { kind: 'deferred', reason: 'circuit_open' };
     }
 
     // Serialised once: these exact bytes are signed and sent.
@@ -75,6 +86,13 @@ export class DeliveryAttempt {
         'webhook-signature': signature,
       },
       body,
+    );
+    // A probe's token is what lets its result, and no other, close or reopen
+    // a half-open circuit.
+    await this.deps.breaker.record(
+      job.endpointId,
+      breakerOutcome(result),
+      decision.kind === 'probe' ? decision.token : undefined,
     );
 
     if (result.outcome === 'success') {

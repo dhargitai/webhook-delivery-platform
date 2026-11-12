@@ -104,6 +104,7 @@ describe('a worker that dies mid-delivery (real Postgres, RabbitMQ and MongoDB)'
     process.env.DATABASE_URL = testDb.url;
     process.env.RABBITMQ_URL = inject('rabbitUrl');
     process.env.MONGO_URL = inject('mongoUrl');
+    process.env.REDIS_URL = inject('redisUrl');
     process.env.MONGO_DB = mongoDbName;
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
