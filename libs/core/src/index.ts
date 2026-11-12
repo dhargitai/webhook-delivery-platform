@@ -38,6 +38,14 @@ export {
   type SafeHttpClientOptions,
 } from './safe-http-client.js';
 export {
+  breakerOutcome,
+  type BreakerDecision,
+  type BreakerOutcome,
+  CircuitBreaker,
+  type CircuitBreakerOptions,
+  DEFAULT_CIRCUIT_BREAKER,
+} from './circuit-breaker.js';
+export {
   MAX_ATTEMPTS,
   RetryPolicy,
   type RetryDecision,
