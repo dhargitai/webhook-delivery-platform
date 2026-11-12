@@ -17,13 +17,17 @@ export class LaneRouter {
   }
 
   routingKey(endpointId: string): string {
+    return laneRoutingKey(this.lane(endpointId));
+  }
+
+  /** The endpoint's lane number, in [0, laneCount). */
+  lane(endpointId: string): number {
     // First 32 bits of a SHA-256 are uniformly distributed, unlike a string
     // hash that clusters on similar ids.
     const bucket = createHash('sha256')
       .update(endpointId)
       .digest()
       .readUInt32BE(0);
-    const lane = bucket % this.laneCount;
-    return laneRoutingKey(lane);
+    return bucket % this.laneCount;
   }
 }

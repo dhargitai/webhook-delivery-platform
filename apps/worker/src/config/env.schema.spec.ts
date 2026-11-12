@@ -5,6 +5,7 @@ const required = {
   DATABASE_URL: 'postgres://u:p@localhost/db',
   RABBITMQ_URL: 'amqp://localhost',
   MONGO_URL: 'mongodb://localhost:27017',
+  REDIS_URL: 'redis://localhost:6379',
 };
 
 describe('worker env schema', () => {
@@ -48,7 +49,7 @@ describe('worker env schema', () => {
     );
   });
 
-  it.each(['DATABASE_URL', 'RABBITMQ_URL', 'MONGO_URL'] as const)(
+  it.each(['DATABASE_URL', 'RABBITMQ_URL', 'MONGO_URL', 'REDIS_URL'] as const)(
     'requires %s',
     (name) => {
       const { [name]: _removed, ...rest } = required;

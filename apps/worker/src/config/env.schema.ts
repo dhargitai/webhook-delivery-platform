@@ -14,6 +14,9 @@ export const envSchema = z.object({
   // The MongoDB server and database the attempt log is written to.
   MONGO_URL: z.string().min(1),
   MONGO_DB: z.string().min(1).default('wdp'),
+  // The Redis server that holds every endpoint's circuit breaker state,
+  // shared by all workers.
+  REDIS_URL: z.string().min(1),
   // Prefix of every exchange and queue. Services of one deployment share it.
   BROKER_NAMESPACE: z.string().min(1).default('wdp'),
   // Number of fresh-delivery lanes the worker consumes: 4 locally, 16 in the

@@ -9,6 +9,7 @@ export const workerConfig = registerAs('worker', () => {
     rabbitmqUrl: env.RABBITMQ_URL,
     mongoUrl: env.MONGO_URL,
     mongoDb: env.MONGO_DB,
+    redisUrl: env.REDIS_URL,
     brokerNamespace: env.BROKER_NAMESPACE,
     laneCount: env.LANE_COUNT,
     prefetch: env.WORKER_PREFETCH,

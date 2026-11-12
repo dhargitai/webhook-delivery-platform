@@ -28,15 +28,15 @@ export abstract class AttemptLog {
 
 /**
  * What to log for an attempt, or `null` when there is nothing to log: a
- * skipped attempt (endpoint missing or disabled) made no call, so it is not an
- * attempt.
+ * skipped attempt (endpoint missing or disabled) or a deferred one (circuit
+ * open) made no call, so it is not an attempt.
  */
 export function toAttemptRecord(
   job: DeliveryJob,
   outcome: AttemptOutcome,
   now: Date,
 ): AttemptRecord | null {
-  if (outcome.kind === 'skipped') return null;
+  if (outcome.kind === 'skipped' || outcome.kind === 'deferred') return null;
 
   const base = {
     tenantId: job.tenantId,

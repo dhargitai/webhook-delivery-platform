@@ -44,7 +44,12 @@ export {
   CircuitBreaker,
   type CircuitBreakerOptions,
   DEFAULT_CIRCUIT_BREAKER,
+  type EndpointCircuit,
 } from './circuit-breaker.js';
+export {
+  type CircuitErrorReporter,
+  FailOpenCircuitBreaker,
+} from './fail-open-circuit-breaker.js';
 export {
   MAX_ATTEMPTS,
   RetryPolicy,

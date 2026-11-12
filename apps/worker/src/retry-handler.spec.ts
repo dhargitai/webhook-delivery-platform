@@ -67,7 +67,17 @@ class FakeRetryPublisher extends RetryPublisher {
     if (this.failWith) throw this.failWith;
     this.deadLettered.push({ job, reason });
   }
+
+  readonly parked: { job: DeliveryJob; delayMs: number }[] = [];
+
+  async park(job: DeliveryJob, delayMs: number): Promise<void> {
+    await this.gate;
+    if (this.failWith) throw this.failWith;
+    this.parked.push({ job, delayMs });
+  }
 }
+
+const deferred: AttemptOutcome = { kind: 'deferred', reason: 'circuit_open' };
 
 const message = {} as ConsumeMessage;
 
@@ -332,5 +342,89 @@ describe('RetryHandler', () => {
 
     await expect(handler.handle(message)).rejects.toThrow(RangeError);
     expect(retries.retried).toEqual([]);
+  });
+  describe('a deferred attempt (no call was made)', () => {
+    beforeEach(() => {
+      inner.outcome = deferred;
+    });
+
+    it('parks the job as it was, without using up an attempt', async () => {
+      inner.job = { ...baseJob, attemptNo: 3 };
+
+      await handler.handle(message);
+
+      expect(retries.parked).toEqual([
+        { job: { ...baseJob, attemptNo: 3 }, delayMs: 5_000 },
+      ]);
+      expect(retries.retried).toEqual([]);
+      expect(retries.deadLettered).toEqual([]);
+    });
+
+    it('parks a first attempt with no attempt number as it was', async () => {
+      await handler.handle(message);
+
+      expect(retries.parked).toEqual([{ job: baseJob, delayMs: 5_000 }]);
+    });
+
+    it('parks the last attempt instead of dead-lettering it', async () => {
+      inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS };
+
+      await handler.handle(message);
+
+      expect(retries.parked).toEqual([
+        { job: { ...baseJob, attemptNo: MAX_ATTEMPTS }, delayMs: 5_000 },
+      ]);
+      expect(retries.deadLettered).toEqual([]);
+    });
+
+    it('waits the policy’s park delay', async () => {
+      handler = new RetryHandler(inner, retries, {
+        policy: new RetryPolicy({ timeScale: 1000, minDelayMs: 20 }),
+        rng: () => rng,
+        maxAttempts: MAX_ATTEMPTS,
+      });
+
+      await handler.handle(message);
+
+      expect(retries.parked[0]?.delayMs).toBe(20);
+    });
+
+    it('reports that it parked the job', async () => {
+      const handled = await handler.handle(message);
+
+      expect(handled).toEqual({
+        job: baseJob,
+        outcome: deferred,
+        next: { kind: 'parked', delayMs: 5_000 },
+      });
+    });
+
+    it('does not resolve before the broker has confirmed the park, so the ack waits for it', async () => {
+      retries.hold();
+      let resolved = false;
+      const handled = handler.handle(message).then((result) => {
+        resolved = true;
+        return result;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(resolved).toBe(false);
+
+      retries.release?.();
+      await handled;
+      expect(resolved).toBe(true);
+      expect(retries.parked).toHaveLength(1);
+    });
+
+    it('asks for the original to be kept when the park cannot be published', async () => {
+      retries.failWith = new Error('no confirm');
+
+      const rejected = handler.handle(message);
+
+      await expect(rejected).rejects.toBeInstanceOf(RequeueError);
+      await expect(rejected).rejects.toMatchObject({
+        cause: retries.failWith,
+      });
+    });
   });
 });

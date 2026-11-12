@@ -163,6 +163,10 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+      # The circuit breakers' state. The worker would still deliver without
+      # it (the breaker fails open), but should start with it.
+      redis:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:

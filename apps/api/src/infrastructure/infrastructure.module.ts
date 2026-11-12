@@ -1,49 +1,24 @@
-import {
-  Global,
-  Inject,
-  Injectable,
-  Module,
-  type OnApplicationShutdown,
-} from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { type ConfigType } from '@nestjs/config';
-import { DatabaseModule } from '@wdp/common';
-import { Redis } from 'ioredis';
+import { DatabaseModule, RedisModule } from '@wdp/common';
 import { databaseConfig } from '../config/database.config.js';
 import { redisConfig } from '../config/redis.config.js';
-import { REDIS } from './tokens.js';
-
-/** Closes the Redis connection when the app shuts down. */
-@Injectable()
-class RedisCloser implements OnApplicationShutdown {
-  constructor(@Inject(REDIS) private readonly redis: Redis) {}
-
-  async onApplicationShutdown(): Promise<void> {
-    await this.redis.quit();
-  }
-}
 
 /**
- * The connections the API's modules share. The database comes from
- * `@wdp/common` (global `DATABASE`, which also closes it); Redis is the API's
- * own.
+ * The connections the API's modules share, both from `@wdp/common`: the
+ * database as `DATABASE` and Redis as `REDIS`. Each is global, so any module
+ * can inject it, and each closes itself when the app shuts down.
  */
-@Global()
 @Module({
   imports: [
     DatabaseModule.forRootAsync({
       inject: [databaseConfig.KEY],
       url: (config: ConfigType<typeof databaseConfig>) => config.url,
     }),
-  ],
-  providers: [
-    {
-      provide: REDIS,
+    RedisModule.forRootAsync({
       inject: [redisConfig.KEY],
-      useFactory: (config: ConfigType<typeof redisConfig>) =>
-        new Redis(config.url),
-    },
-    RedisCloser,
+      url: (config: ConfigType<typeof redisConfig>) => config.url,
+    }),
   ],
-  exports: [REDIS],
 })
 export class InfrastructureModule {}

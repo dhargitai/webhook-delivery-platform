@@ -119,4 +119,13 @@ describe('toAttemptRecord', () => {
       expect(toAttemptRecord(job, outcome, now)).toBeNull();
     },
   );
+
+  it('records nothing for a deferred attempt: the endpoint was not called', () => {
+    const outcome: AttemptOutcome = {
+      kind: 'deferred',
+      reason: 'circuit_open',
+    };
+
+    expect(toAttemptRecord(job, outcome, now)).toBeNull();
+  });
 });

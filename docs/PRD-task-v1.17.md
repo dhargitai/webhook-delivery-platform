@@ -1,8 +1,8 @@
 **Status:** Approved
 **Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.16
-**Source PRD:** PRD-v1.7
+**Version:** 1.17
+**Source PRD:** PRD-v1.8
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -408,19 +408,19 @@ AES-256-GCM envelope encryption behind a `KeyProvider` port, with the KEK from `
 - [x] Against real Redis, the circuit opens, half-opens with one probe, and closes or reopens
 - [x] A dead probe worker cannot wedge the circuit
 
-### Task 24: Breaker in the worker ⬜
+### Task 24: Breaker in the worker ✅
 
 **Original Story:** 20
 **Scope:** `worker`
 **Blocked by:** Tasks 18, 23
 
 **What to build:**
-A denied job is re-parked in the short delay tier without calling the endpoint and without consuming an attempt.
+A denied job is re-parked in the short delay tier without calling the endpoint and without consuming an attempt. Built as a gate in `DeliveryAttempt` (`@wdp/core`), after the endpoint lookup, so a skipped job never wins a probe: `allow()` before signing, and `record(endpointId, breakerOutcome(result), probeToken)` after the POST. A denied call is a new `deferred` outcome (reason `circuit_open`), which is not logged as an attempt; `RetryHandler` parks it as it is, through `RetryPublisher.park(job, delayMs)`, to the delay queue of its endpoint's lane (`LaneRouter.lane`), confirmed before the ack, even on the last attempt. The worker wraps the breaker in `FailOpenCircuitBreaker`: a Redis error lets the call through and a failed `record` is dropped, both logged, and the worker's Redis client rejects commands at once while disconnected, so an outage neither blocks nor slows deliveries. The breaker keeps the PRD timings (not scaled by `TIME_SCALE`) and is provided under `CIRCUIT_BREAKER`, which the tests override with shorter ones. Redis comes from a new `RedisModule` in `@wdp/common`, which the API now uses too; the worker requires `REDIS_URL`.
 
 **Acceptance Criteria:**
 
-- [ ] A dead endpoint stops receiving calls once the circuit opens
-- [ ] Attempt numbers are not consumed while the circuit is open
+- [x] A dead endpoint stops receiving calls once the circuit opens
+- [x] Attempt numbers are not consumed while the circuit is open
 
 ### Task 25: EndpointLimiter concurrency cap ⬜
 
@@ -457,7 +457,7 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 **Blocked by:** Tasks 18, 26
 
 **What to build:**
-Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue.
+Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it.
 
 **Acceptance Criteria:**
 

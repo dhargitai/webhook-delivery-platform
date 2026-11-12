@@ -1,4 +1,5 @@
-import type { DeliveryJob } from '@wdp/core';
+import { randomUUID } from 'node:crypto';
+import { type DeliveryJob, LaneRouter } from '@wdp/core';
 import {
   ConfirmPublisher,
   decodeMessage,
@@ -59,9 +60,15 @@ describe('BrokerRetryPublisher', () => {
     attemptNo: 2,
   };
 
+  const lanes = new LaneRouter(4);
+
   beforeEach(() => {
     channel = new FakeChannel();
-    publisher = new BrokerRetryPublisher(new ConfirmPublisher(channel), names);
+    publisher = new BrokerRetryPublisher(
+      new ConfirmPublisher(channel),
+      names,
+      lanes,
+    );
   });
 
   it('puts the job in the retry tier queue of its delay, through the default exchange', async () => {
@@ -146,6 +153,61 @@ describe('BrokerRetryPublisher', () => {
       await expect(
         publisher.deadLetter(job, 'http_error: HTTP 503'),
       ).rejects.toBeInstanceOf(PublishFailedError);
+    });
+  });
+
+  describe('park', () => {
+    it('puts the job in the delay queue of its own lane, through the default exchange', async () => {
+      await publisher.park(job, 5_000);
+
+      expect(channel.sent).toHaveLength(1);
+      expect(channel.sent[0]).toMatchObject({
+        exchange: '',
+        routingKey: names.parkQueue(5_000, lanes.lane(job.endpointId)),
+      });
+    });
+
+    it('picks the lane by the endpoint, so the job returns to the lane it came from', async () => {
+      const endpointIds = Array.from({ length: 50 }, () => randomUUID());
+
+      for (const endpointId of endpointIds) {
+        await publisher.park({ ...job, endpointId }, 5_000);
+      }
+
+      const queues = channel.sent.map((sent) => sent.routingKey);
+      expect(queues).toEqual(
+        endpointIds.map((id) => names.parkQueue(5_000, lanes.lane(id))),
+      );
+      // The endpoints spread over the lanes, so a fixed lane would be caught.
+      expect(new Set(queues).size).toBeGreaterThan(1);
+    });
+
+    it('picks the queue by the delay it is given', async () => {
+      await publisher.park(job, 500);
+
+      expect(channel.sent[0]?.routingKey).toBe(
+        names.parkQueue(500, lanes.lane(job.endpointId)),
+      );
+    });
+
+    it('sends the job as it was, attempt number included, under its delivery id', async () => {
+      await publisher.park(job, 5_000);
+
+      const body = channel.sent[0]?.content;
+      expect(body && decodeMessage(body, deliveryRequestedSchema)).toEqual(job);
+      expect(channel.sent[0]?.options).toMatchObject({
+        messageId: 'delivery-1',
+        correlationId: 'event-1',
+        type: 'delivery.requested',
+      });
+    });
+
+    it('fails when the broker does not confirm', async () => {
+      channel.nack = true;
+
+      await expect(publisher.park(job, 5_000)).rejects.toBeInstanceOf(
+        PublishFailedError,
+      );
     });
   });
 });

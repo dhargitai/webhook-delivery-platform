@@ -118,6 +118,7 @@
         "@wdp/core": "workspace:*",
         "@wdp/domain": "workspace:*",
         "@wdp/messaging": "workspace:*",
+        "ioredis": "^6.0.0",
         "kysely": "^0.29.8",
         "mongodb": "^7.8.0",
         "reflect-metadata": "^0.2.2",
@@ -134,6 +135,7 @@
       "dependencies": {
         "@wdp/core": "workspace:*",
         "@wdp/messaging": "workspace:*",
+        "ioredis": "^6.0.0",
         "kysely": "^0.29.8",
         "mongodb": "^7.8.0",
       },
