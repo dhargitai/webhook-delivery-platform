@@ -6,8 +6,9 @@ import { WorkerModule } from './worker.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(WorkerModule);
-  // SIGTERM and SIGINT then run the shutdown hooks. Consumers added later
-  // finish their in-flight work there (Task 21).
+  // SIGTERM and SIGINT then run the shutdown hooks: stop taking jobs, finish
+  // and ack the ones in flight, then close the channels and connections (see
+  // `WorkerRunner`). Compose's 30 s stop_grace_period bounds the wait.
   app.enableShutdownHooks();
   const { port } = app.get<ConfigType<typeof workerConfig>>(workerConfig.KEY);
   await app.listen(port);
