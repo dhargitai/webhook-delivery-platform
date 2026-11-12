@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.7
+**Version:** 1.8
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -256,6 +256,7 @@ stateDiagram-v2
 | Probe election            | `SET cb:{id}:probe <token> NX PX 15000`, one token per probe (above the 10 s HTTP timeout, so a probe worker that dies can't wedge the circuit); the winner probes, the others are denied |
 | Atomicity                 | `record()` (add to window, trim, count, compare, change state) is one Lua script; the probe election is the single `SET NX PX` command                                                    |
 | Denied delivery           | Re-parked in the short delay tier (5 s, scaled) without calling the endpoint and without consuming an attempt                                                                             |
+| Redis unavailable         | Fails open: the call proceeds as if the circuit were closed and a result that cannot be recorded is dropped, both logged                                                                  |
 
 #### Fairness and limits
 
@@ -362,7 +363,7 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 
 **Deliverables**
 
-- ⬜ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier (the breaker module is built; the worker doesn't use it yet)
+- ⬜ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier (the breaker is built and the worker consults it before every call)
 - ⬜ Sharded fresh lanes, separation of fresh and retry consumption priority
 - ✅ SSRF guard test suite
 - ⬜ Secret encryption and rotation
