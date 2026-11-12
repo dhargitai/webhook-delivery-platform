@@ -12,6 +12,12 @@ export type BreakerDecision =
   /** Call it as the circuit's single probe, and pass the token to `record`. */
   | { kind: 'probe'; token: string };
 
+/**
+ * What a delivery needs of a circuit breaker: ask before a call, report its
+ * result after.
+ */
+export type EndpointCircuit = Pick<CircuitBreaker, 'allow' | 'record'>;
+
 export interface CircuitBreakerOptions {
   /** The sliding window the failure rate is measured over. */
   windowMs: number;
