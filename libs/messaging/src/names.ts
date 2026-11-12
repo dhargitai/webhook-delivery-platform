@@ -17,6 +17,8 @@ export const FAILURE_KIND_HEADER = 'x-failure-kind';
 export const FAILURE_REASON_HEADER = 'x-failure-reason';
 /** An event whose dispatch kept failing until its attempts ran out. */
 export const DISPATCH_EXHAUSTED = 'dispatch-exhausted';
+/** A delivery whose attempts all failed until its budget ran out. */
+export const DELIVERY_EXHAUSTED = 'delivery-exhausted';
 
 export interface TopologyNames {
   eventsExchange: string;
