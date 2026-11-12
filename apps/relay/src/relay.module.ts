@@ -1,11 +1,9 @@
-import { Logger, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, type ConfigType } from '@nestjs/config';
-import { createDatabase } from '@wdp/core';
-import { BrokerConnection } from '@wdp/messaging';
+import { BrokerModule, DatabaseModule } from '@wdp/common';
 import { envSchema } from './config/env.schema.js';
 import { relayConfig } from './config/relay.config.js';
 import { RelayRunner } from './relay-runner.js';
-import { BROKER, DATABASE } from './tokens.js';
 
 @Module({
   imports: [
@@ -15,30 +13,15 @@ import { BROKER, DATABASE } from './tokens.js';
       load: [relayConfig],
       validationSchema: envSchema,
     }),
-  ],
-  providers: [
-    {
-      provide: DATABASE,
+    DatabaseModule.forRootAsync({
       inject: [relayConfig.KEY],
-      useFactory: (config: ConfigType<typeof relayConfig>) => {
-        const logger = new Logger('Database');
-        return createDatabase(config.databaseUrl, {
-          onPoolError: (error) =>
-            logger.error('database pool error', error.stack),
-        });
-      },
-    },
-    {
-      provide: BROKER,
+      url: (config: ConfigType<typeof relayConfig>) => config.databaseUrl,
+    }),
+    BrokerModule.forRootAsync({
       inject: [relayConfig.KEY],
-      useFactory: (config: ConfigType<typeof relayConfig>) => {
-        const logger = new Logger('Broker');
-        return BrokerConnection.connect(config.rabbitmqUrl, (error) =>
-          logger.error('broker connection error', error.stack),
-        );
-      },
-    },
-    RelayRunner,
+      url: (config: ConfigType<typeof relayConfig>) => config.rabbitmqUrl,
+    }),
   ],
+  providers: [RelayRunner],
 })
 export class RelayModule {}

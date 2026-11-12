@@ -1,12 +1,13 @@
 import {
   Inject,
   Injectable,
+  type BeforeApplicationShutdown,
   Logger,
   type OnApplicationBootstrap,
-  type OnApplicationShutdown,
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { type ConfigType } from '@nestjs/config';
+import { BROKER, DATABASE } from '@wdp/common';
 import {
   type Database,
   Dispatcher,
@@ -29,17 +30,17 @@ import { BrokerDispatchRetryPublisher } from './broker-dispatch-retry-publisher.
 import { dispatcherConfig } from './config/dispatcher.config.js';
 import { DispatchFailureHandler } from './dispatch-failure-handler.js';
 import { EventMessageHandler } from './event-message-handler.js';
-import { BROKER, DATABASE } from './tokens.js';
 
 /**
- * Owns the dispatcher's lifecycle. Nest runs shutdown hooks in a fixed order,
- * which is what makes the stop graceful: the consumer stops first
- * (onModuleDestroy), finishing the events it already holds, and only then are
- * the connections closed (onApplicationShutdown).
+ * Owns the dispatcher's lifecycle. Nest runs each shutdown phase for the whole
+ * app before the next, which is what makes the stop graceful: the consumer
+ * stops first (onModuleDestroy), finishing the events it already holds, then
+ * the dispatcher's channels close (beforeApplicationShutdown), and only then
+ * does `@wdp/common` close the connections (onApplicationShutdown).
  */
 @Injectable()
 export class DispatcherRunner
-  implements OnApplicationBootstrap, OnModuleDestroy, OnApplicationShutdown
+  implements OnApplicationBootstrap, OnModuleDestroy, BeforeApplicationShutdown
 {
   private readonly logger = new Logger(DispatcherRunner.name);
   private consumer: Consumer | undefined;
@@ -135,10 +136,8 @@ export class DispatcherRunner
     this.logger.log('dispatcher stopped');
   }
 
-  async onApplicationShutdown(): Promise<void> {
+  async beforeApplicationShutdown(): Promise<void> {
     await Promise.all(this.channels.map((channel) => channel.close()));
-    await this.broker.close();
-    await this.db.destroy();
   }
 
   /**

@@ -1,11 +1,9 @@
-import { Logger, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, type ConfigType } from '@nestjs/config';
-import { createDatabase } from '@wdp/core';
-import { BrokerConnection } from '@wdp/messaging';
+import { BrokerModule, DatabaseModule } from '@wdp/common';
 import { dispatcherConfig } from './config/dispatcher.config.js';
 import { envSchema } from './config/env.schema.js';
 import { DispatcherRunner } from './dispatcher-runner.js';
-import { BROKER, DATABASE } from './tokens.js';
 
 @Module({
   imports: [
@@ -15,30 +13,15 @@ import { BROKER, DATABASE } from './tokens.js';
       load: [dispatcherConfig],
       validationSchema: envSchema,
     }),
-  ],
-  providers: [
-    {
-      provide: DATABASE,
+    DatabaseModule.forRootAsync({
       inject: [dispatcherConfig.KEY],
-      useFactory: (config: ConfigType<typeof dispatcherConfig>) => {
-        const logger = new Logger('Database');
-        return createDatabase(config.databaseUrl, {
-          onPoolError: (error) =>
-            logger.error('database pool error', error.stack),
-        });
-      },
-    },
-    {
-      provide: BROKER,
+      url: (config: ConfigType<typeof dispatcherConfig>) => config.databaseUrl,
+    }),
+    BrokerModule.forRootAsync({
       inject: [dispatcherConfig.KEY],
-      useFactory: (config: ConfigType<typeof dispatcherConfig>) => {
-        const logger = new Logger('Broker');
-        return BrokerConnection.connect(config.rabbitmqUrl, (error) =>
-          logger.error('broker connection error', error.stack),
-        );
-      },
-    },
-    DispatcherRunner,
+      url: (config: ConfigType<typeof dispatcherConfig>) => config.rabbitmqUrl,
+    }),
   ],
+  providers: [DispatcherRunner],
 })
 export class DispatcherModule {}
