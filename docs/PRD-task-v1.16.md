@@ -1,8 +1,8 @@
 **Status:** Approved
 **Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.15
-**Source PRD:** PRD-v1.6
+**Version:** 1.16
+**Source PRD:** PRD-v1.7
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -394,19 +394,19 @@ AES-256-GCM envelope encryption behind a `KeyProvider` port, with the KEK from `
 - [ ] No plaintext secret is stored in Postgres
 - [ ] The worker signs correctly using decrypted secrets
 
-### Task 23: CircuitBreaker module ⬜
+### Task 23: CircuitBreaker module ✅
 
 **Original Story:** 20
 **Scope:** `core`, Redis
 **Blocked by:** None
 
 **What to build:**
-`allow(endpointId)` and `record(endpointId, outcome)`: sliding 60 s window, trip at 50% failures with at least 20 samples, exponential cooldown with jitter, lazy half-open, single probe elected with `SET NX PX`.
+`allow(endpointId)` and `record(endpointId, outcome)`: sliding 60 s window, trip at 50% failures with at least 20 samples, exponential cooldown with jitter, lazy half-open, single probe elected with `SET NX PX`. Built as `CircuitBreaker`, `breakerOutcome` and `DEFAULT_CIRCUIT_BREAKER` in `@wdp/core`: two Lua scripts on the PRD keys, with time from Redis (`TIME`) and the durations as constructor options defaulting to the PRD values. `allow` returns `allow`, `deny` or `probe` with a token, and the probe passes the token back as `record(endpointId, outcome, probeToken?)`, so a late result of a call made before the trip cannot close the circuit; the election is the `SET NX PX` inside the `allow` script. The cap applies before the jitter, so a level-5 cooldown spreads over 8 to 12 min. `breakerOutcome` maps an HTTP result to the PRD's failure list; every other result (a redirect, an oversized response, an invalid URL included) counts as a success. Nothing calls it yet: the worker uses it from Task 24.
 
 **Acceptance Criteria:**
 
-- [ ] Against real Redis, the circuit opens, half-opens with one probe, and closes or reopens
-- [ ] A dead probe worker cannot wedge the circuit
+- [x] Against real Redis, the circuit opens, half-opens with one probe, and closes or reopens
+- [x] A dead probe worker cannot wedge the circuit
 
 ### Task 24: Breaker in the worker ⬜
 

@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.6
+**Version:** 1.7
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -147,7 +147,7 @@ Each module hides substantial logic behind a small, stable, testable interface.
 | **RetryPolicy**                   | `next(attempt, rng) -> {action: retry \| dead, delay, tier, bucket}`                                       | Schedule table, jitter, time-scale factor for demos, attempt budget. Pure function                                                                                                   |
 | **SignatureService**              | `sign(secrets[], id, timestamp, rawBody) -> header`; `verify(header, id, timestamp, body, secrets[], now)` | HMAC-SHA256 over `id.timestamp.body`, multiple secrets during rotation, constant-time comparison, tolerance window                                                                   |
 | **SsrfGuard / SafeHttpClient**    | `post(url, headers, body) -> Result`                                                                       | DNS resolution, IP deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA, mapped IPv4), IP pinning with correct SNI/Host, no redirects, connect and total timeouts, response cap |
-| **CircuitBreaker**                | `allow(endpointId) -> allow \| deny \| probe`; `record(endpointId, outcome)`                               | Redis state machine (closed, open, half-open), thresholds, single-probe election, cooldown                                                                                           |
+| **CircuitBreaker**                | `allow(endpointId) -> allow \| deny \| probe(token)`; `record(endpointId, outcome, probeToken?)`           | Redis state machine (closed, open, half-open), thresholds, single-probe election, cooldown                                                                                           |
 | **EndpointLimiter**               | `acquire(endpointId) -> Permit \| Denied`; `release(permit)`                                               | Concurrency semaphore and token bucket in Redis (atomic scripts), expiry of leaked permits                                                                                           |
 | **DeliveryStateMachine** (domain) | `Delivery.recordAttempt(result) -> events`, `Delivery.replay()`                                            | Legal states and transitions (pending, in-flight, succeeded, retrying, dead), invariants such as attempt budget                                                                      |
 | **OutboxRelay**                   | `runOnce() -> publishedCount`                                                                              | Batch selection with `SKIP LOCKED`, publisher confirms, marking `published_at`, crash-safe republish                                                                                 |
@@ -245,17 +245,17 @@ stateDiagram-v2
     HalfOpen --> Open: probe fails (level + 1)
 ```
 
-| Parameter                 | Value                                                                                                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Window                    | Sliding 60 s, a Redis sorted set scored by timestamp; trimmed on each write and capped at 1000 members                                                                  |
-| Trip rule                 | Failure rate of at least 50% with at least 20 samples in the window                                                                                                     |
-| Counts as breaker failure | Timeout, connection or SSRF-block error, 5xx, 408, 429                                                                                                                  |
-| Counts as breaker success | 2xx and any other 4xx (the endpoint is reachable; the delivery itself still fails and retries)                                                                          |
-| Cooldown                  | Exponential: 30 s × 2^level, level 0 to 5, capped at 10 min, with ±20% jitter, stored as `openUntil`                                                                    |
-| Open to half-open         | Lazy: evaluated inside `allow()` when `now >= openUntil`, no timer                                                                                                      |
-| Probe election            | `SET cb:{id}:probe <workerId> NX PX 15000` (above the 10 s HTTP timeout, so a probe worker that dies can't wedge the circuit); the winner probes, the others are denied |
-| Atomicity                 | `record()` (add to window, trim, count, compare, change state) is one Lua script; the probe election is the single `SET NX PX` command                                  |
-| Denied delivery           | Re-parked in the short delay tier (5 s, scaled) without calling the endpoint and without consuming an attempt                                                           |
+| Parameter                 | Value                                                                                                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Window                    | Sliding 60 s, a Redis sorted set scored by timestamp; trimmed on each write and capped at 1000 members                                                                                    |
+| Trip rule                 | Failure rate of at least 50% with at least 20 samples in the window                                                                                                                       |
+| Counts as breaker failure | Timeout, connection or SSRF-block error, 5xx, 408, 429                                                                                                                                    |
+| Counts as breaker success | 2xx, any other 4xx and any other result, a redirect, an oversized response or an invalid URL included (the endpoint is reachable; the delivery itself still fails and retries)            |
+| Cooldown                  | Exponential: 30 s × 2^level, level 0 to 5, capped at 10 min, with ±20% jitter applied after the cap, stored as `openUntil`                                                                |
+| Open to half-open         | Lazy: evaluated inside `allow()` when `now >= openUntil`, no timer                                                                                                                        |
+| Probe election            | `SET cb:{id}:probe <token> NX PX 15000`, one token per probe (above the 10 s HTTP timeout, so a probe worker that dies can't wedge the circuit); the winner probes, the others are denied |
+| Atomicity                 | `record()` (add to window, trim, count, compare, change state) is one Lua script; the probe election is the single `SET NX PX` command                                                    |
+| Denied delivery           | Re-parked in the short delay tier (5 s, scaled) without calling the endpoint and without consuming an attempt                                                                             |
 
 #### Fairness and limits
 
@@ -362,7 +362,7 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 
 **Deliverables**
 
-- ⬜ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier
+- ⬜ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier (the breaker module is built; the worker doesn't use it yet)
 - ⬜ Sharded fresh lanes, separation of fresh and retry consumption priority
 - ✅ SSRF guard test suite
 - ⬜ Secret encryption and rotation
