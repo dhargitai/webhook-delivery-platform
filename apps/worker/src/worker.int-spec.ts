@@ -7,6 +7,7 @@ import {
   type Database,
   type DeliveryJob,
   generateEndpointSecret,
+  MAX_ATTEMPTS,
   RetryPolicy,
   SignatureService,
 } from '@wdp/core';
@@ -17,7 +18,13 @@ import {
   ConfirmPublisher,
   declareRetryTopology,
   declareTopology,
+  decodeMessage,
+  DELIVERY_EXHAUSTED,
+  deliveryRequestedSchema,
+  DISPATCH_EXHAUSTED,
   encodeMessage,
+  FAILURE_KIND_HEADER,
+  FAILURE_REASON_HEADER,
   topologyNames,
   type TopologyNames,
 } from '@wdp/messaging';
@@ -174,6 +181,24 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     const { messageCount } = await channel.checkQueue(queue);
     await channel.close();
     return messageCount;
+  }
+
+  /**
+   * Takes the dead letters with this message id off the DLQ. Filtered by id:
+   * an always-failing job left by another test can end up there as well.
+   */
+  async function deadLettered(messageId: string) {
+    return (await drain(names.deadLetterQueue))
+      .filter((message) => message.properties.messageId === messageId)
+      .map((message) => {
+        // amqplib types the property loosely; the test only compares it.
+        const type: unknown = message.properties.type;
+        return {
+          type,
+          headers: message.properties.headers ?? {},
+          content: message.content,
+        };
+      });
   }
 
   async function laneBacklog(): Promise<number> {
@@ -439,6 +464,90 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     });
   });
 
+  describe('exhausted deliveries', () => {
+    it('dead-letters a job whose last attempt fails, once, with the reason, and retries nothing', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/always-fail`,
+      });
+      // Starting on the last attempt: the climb to it is covered above and in
+      // the unit tests, and the full schedule takes about a minute even scaled.
+      const job = { ...jobFor(tenantId, id), attemptNo: MAX_ATTEMPTS };
+      const hits = () =>
+        rejected.filter((r) => r.headers['webhook-id'] === job.deliveryId);
+
+      await publishJob(job);
+
+      await eventually(async () => {
+        expect(await count(names.deadLetterQueue)).toBeGreaterThanOrEqual(1);
+      });
+      await untilAcked();
+      expect(await count(names.retryReadyQueue)).toBe(0);
+      expect(hits()).toHaveLength(1);
+
+      const dead = await deadLettered(job.deliveryId);
+      expect(dead).toHaveLength(1);
+      expect(dead[0]?.type).toBe('delivery.requested');
+      expect(dead[0]?.headers).toMatchObject({
+        [FAILURE_KIND_HEADER]: DELIVERY_EXHAUSTED,
+        [FAILURE_REASON_HEADER]: 'http_error: HTTP 503',
+      });
+      // Told apart from an event whose dispatch was given up on.
+      expect(dead[0]?.headers[FAILURE_KIND_HEADER]).not.toBe(
+        DISPATCH_EXHAUSTED,
+      );
+      // The job as it was, so it can be replayed.
+      const content = dead[0]?.content;
+      expect(
+        content && decodeMessage(content, deliveryRequestedSchema),
+      ).toEqual(job);
+
+      // The last attempt is logged before it is given up on.
+      expect(
+        await attempts
+          .find({ delivery_id: job.deliveryId }, { projection: { _id: 0 } })
+          .toArray(),
+      ).toMatchObject([{ attempt_no: MAX_ATTEMPTS, status: 'failure' }]);
+    });
+
+    it('keeps the job when the dead letter cannot be published, so it is never lost', async () => {
+      const tenantId = await createTenant();
+      const { id } = await addEndpoint(tenantId, {
+        url: `http://localhost:${receiverPort}/always-fail`,
+      });
+      const job = { ...jobFor(tenantId, id), attemptNo: MAX_ATTEMPTS };
+      const hits = () =>
+        rejected.filter((r) => r.headers['webhook-id'] === job.deliveryId);
+
+      // With the DLQ unbound the dead letter is unroutable. The worker must not
+      // ack the job: it comes back, and the receiver is called again.
+      const channel = await conn.createChannel();
+      await channel.unbindQueue(
+        names.deadLetterQueue,
+        names.deadLetterExchange,
+        '',
+      );
+      try {
+        await publishJob(job);
+        await eventually(() => expect(hits().length).toBeGreaterThanOrEqual(2));
+      } finally {
+        await channel.bindQueue(
+          names.deadLetterQueue,
+          names.deadLetterExchange,
+          '',
+        );
+        await channel.close();
+      }
+
+      // The binding is back: the next try is dead-lettered, once.
+      await eventually(async () => {
+        expect(await count(names.deadLetterQueue)).toBeGreaterThanOrEqual(1);
+      });
+      await untilAcked();
+      expect(await deadLettered(job.deliveryId)).toHaveLength(1);
+    });
+  });
+
   // The receiver answers on loopback, so a request that gets through shows up
   // in `received`: these fail if the guard is not wired into the client.
   it.each([
@@ -509,10 +618,14 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     );
 
     await eventually(async () => {
-      expect(await count(names.deadLetterQueue)).toBe(1);
+      expect(await count(names.deadLetterQueue)).toBeGreaterThanOrEqual(1);
     });
     expect(await laneBacklog()).toBe(0);
     expect(received).toHaveLength(0);
+    // A reject by the consumer: no failure kind, unlike an exhausted delivery.
+    const dead = await deadLettered('garbage');
+    expect(dead).toHaveLength(1);
+    expect(dead[0]?.headers[FAILURE_KIND_HEADER]).toBeUndefined();
     await channel.close();
   });
 

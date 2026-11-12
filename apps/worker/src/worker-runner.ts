@@ -169,11 +169,10 @@ export class WorkerRunner
       });
       return;
     }
-    // Until the DLQ exists (Task 19), a delivery out of attempts ends here.
     this.logger.warn(
       next.kind === 'retry'
         ? 'delivery attempt failed, retry scheduled'
-        : 'delivery attempt failed, no attempts left',
+        : 'delivery attempt failed, attempts exhausted, dead-lettered',
       {
         ...context,
         ...describe(outcome),
@@ -198,10 +197,12 @@ export class WorkerRunner
       return;
     }
     if (error instanceof RequeueError) {
-      // The attempt was made but its retry could not be parked, so the job
-      // goes back to its queue and is tried again: a duplicate, never a loss.
-      this.logger.error('could not schedule the retry, job requeued', {
+      // The attempt was made but its retry or dead letter could not be parked,
+      // so the job goes back to its queue and is tried again: a duplicate,
+      // never a loss. The message says which of the two it was.
+      this.logger.error('could not park the failed job, job requeued', {
         message_id: messageId,
+        reason: error.message,
         error: errorText(error.cause ?? error),
       });
       return;
