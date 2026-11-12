@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { laneRoutingKey } from '@wdp/domain';
 import { describe, expect, it } from 'vitest';
 import { LaneRouter } from './lane-router.js';
 
@@ -54,6 +55,23 @@ describe('LaneRouter', () => {
     expect(keys.size).toBe(16);
     for (const key of keys) {
       expect(key).toMatch(/^fresh\.shard\.\d{2}$/);
+    }
+  });
+
+  it('gives the lane number its routing key names, for every endpoint', () => {
+    const router = new LaneRouter(16);
+    const lanes = new Set<number>();
+
+    for (let i = 0; i < 500; i++) {
+      const endpointId = randomUUID();
+      const lane = router.lane(endpointId);
+      lanes.add(lane);
+      expect(router.routingKey(endpointId)).toBe(laneRoutingKey(lane));
+    }
+
+    expect(lanes.size).toBe(16);
+    for (const lane of lanes) {
+      expect(Number.isInteger(lane) && lane >= 0 && lane < 16).toBe(true);
     }
   });
 

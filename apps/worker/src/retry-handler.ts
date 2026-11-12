@@ -12,15 +12,20 @@ export type NextStep =
   /** The job was parked and will be tried again as attempt `attemptNo`. */
   | { kind: 'retry'; attemptNo: number; delayMs: number }
   /** The attempt budget is spent. */
-  | { kind: 'exhausted' };
+  | { kind: 'exhausted' }
+  /** No call was made; the job was put back, to be tried again as it was. */
+  | { kind: 'parked'; delayMs: number };
 
 export interface RetryHandled extends HandledJob {
   next: NextStep;
 }
 
 export interface RetryHandlerOptions {
-  /** Picks the retry tier. The delivery decides whether there is a retry at all. */
-  policy: Pick<RetryPolicy, 'next'>;
+  /**
+   * Picks the retry tier, and how long a deferred job waits. The delivery
+   * decides whether there is a retry at all.
+   */
+  policy: Pick<RetryPolicy, 'next' | 'parkDelayMs'>;
   /** In [0, 1): picks the jitter bucket. */
   rng: () => number;
   /** Attempts per delivery, the first included (PRD: 8). */
@@ -40,7 +45,9 @@ export interface RetryHandlerOptions {
  *   The policy only says how long a retry waits.
  * - A failure on the last attempt is dead-lettered with its reason instead of
  *   retried.
- * - A retry or dead letter that cannot be published throws `RequeueError`,
+ * - A deferred attempt made no call, so it uses up no attempt: the job is
+ *   parked as it was, even on its last attempt, and comes back to its lane.
+ * - A retry, park or dead letter that cannot be published throws `RequeueError`,
  *   which keeps the original job queued.
  * - Anything the inner handler throws, a malformed message or a log that
  *   cannot be written included, passes through and dead-letters the job.
@@ -60,6 +67,15 @@ export class RetryHandler {
     // No call was made, so there is no attempt to count or to retry.
     if (outcome.kind === 'skipped')
       return { ...handled, next: { kind: 'none' } };
+    if (outcome.kind === 'deferred') {
+      // Before the state machine: it would count this as an attempt.
+      const delayMs = this.options.policy.parkDelayMs;
+      await this.park(
+        () => this.retries.park(job, delayMs),
+        'could not park the deferred job',
+      );
+      return { ...handled, next: { kind: 'parked', delayMs } };
+    }
 
     const delivery = Delivery.pending({
       attemptNo: job.attemptNo ?? 1,

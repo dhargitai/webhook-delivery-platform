@@ -13,6 +13,7 @@ import {
   type Database,
   DeliveryAttempt,
   KyselyEndpointTargetLookup,
+  LaneRouter,
   MAX_ATTEMPTS,
   type MongoAttemptLog,
   RetryPolicy,
@@ -102,7 +103,11 @@ export class WorkerRunner
         this.attemptLog,
         () => new Date(),
       ),
-      new BrokerRetryPublisher(new ConfirmPublisher(retryChannel), names),
+      new BrokerRetryPublisher(
+        new ConfirmPublisher(retryChannel),
+        names,
+        new LaneRouter(this.config.laneCount),
+      ),
       { policy, rng: Math.random, maxAttempts: MAX_ATTEMPTS },
     );
 
@@ -169,6 +174,16 @@ export class WorkerRunner
       });
       return;
     }
+    if (outcome.kind === 'deferred') {
+      // Debug: an open circuit defers every job for its endpoint, over and
+      // over, until it closes.
+      this.logger.debug('delivery deferred, job parked', {
+        ...context,
+        reason: outcome.reason,
+        ...(next.kind === 'parked' ? { park_delay_ms: next.delayMs } : {}),
+      });
+      return;
+    }
     this.logger.warn(
       next.kind === 'retry'
         ? 'delivery attempt failed, retry scheduled'
@@ -214,7 +229,9 @@ export class WorkerRunner
   }
 }
 
-function describe(outcome: Exclude<AttemptOutcome, { kind: 'delivered' }>) {
+function describe(
+  outcome: Extract<AttemptOutcome, { kind: 'failed' | 'skipped' }>,
+) {
   return outcome.kind === 'failed'
     ? {
         failure: outcome.failure,

@@ -14,7 +14,9 @@ export type AttemptOutcome =
       latencyMs: number;
       snippet?: string;
     }
-  | { kind: 'skipped'; reason: 'endpoint_missing' | 'endpoint_disabled' };
+  | { kind: 'skipped'; reason: 'endpoint_missing' | 'endpoint_disabled' }
+  /** The endpoint was not called now, but will be later: put the job back. */
+  | { kind: 'deferred'; reason: 'circuit_open' };
 
 export interface DeliveryAttemptDeps {
   lookup: EndpointTargetLookup;
