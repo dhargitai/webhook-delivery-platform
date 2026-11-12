@@ -1,8 +1,8 @@
 **Status:** Approved
 **Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.13
-**Source PRD:** PRD-v1.4
+**Version:** 1.14
+**Source PRD:** PRD-v1.5
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -328,7 +328,7 @@ A pure `next(attempt, rng) -> {action, delay, tier, bucket}` (no `now`: nothing 
 **Blocked by:** Tasks 14, 15, 16, 17
 
 **What to build:**
-On a failed attempt: log it, publish to the retry tier, wait for the confirm, then ack. This replaces Task 14's branch, which only logged a failed attempt and acked it. The PRD's DeliveryStateMachine (`Delivery.recordAttempt`, states pending, in-flight, succeeded, retrying, dead, and the attempt budget) lands here in `@wdp/domain`, and the job carries its attempt number. Built as `Delivery` (it decides retry or give up from the budget, which is a constructor argument because `@wdp/core` depends on `@wdp/domain`; replay is Task 32) and `IllegalDeliveryTransitionError` in `@wdp/domain`, and `RetryHandler`, `RetryPublisher` and `BrokerRetryPublisher` in `apps/worker`. `RetryPolicy` only picks the tier; if it has none for an attempt the budget allows, the handler throws instead of guessing. A retry is the job with `attemptNo + 1`, published through the default exchange to the tier queue of its delay and confirmed before the ack; the `webhook-id` (the `delivery_id`) is unchanged. A retry that cannot be published throws `RequeueError`, which keeps the original job queued. The worker declares the retry topology from the policy and consumes `retry.ready` with its own prefetch. New settings: `TIME_SCALE` (default 1), `RETRY_MIN_DELAY_MS` (default 0) and `WORKER_RETRY_PREFETCH` (default 5). A failure on the 8th attempt is logged and acked, with no retry: the DLQ entry is Task 19. An infrastructure error (a failed log write or endpoint lookup) still dead-letters the job, as before.
+On a failed attempt: log it, publish to the retry tier, wait for the confirm, then ack. This replaces Task 14's branch, which only logged a failed attempt and acked it. The PRD's DeliveryStateMachine (`Delivery.recordAttempt`, states pending, in-flight, succeeded, retrying, dead, and the attempt budget) lands here in `@wdp/domain`, and the job carries its attempt number. Built as `Delivery` (it decides retry or give up from the budget, which is a constructor argument because `@wdp/core` depends on `@wdp/domain`; replay is Task 32) and `IllegalDeliveryTransitionError` in `@wdp/domain`, and `RetryHandler`, `RetryPublisher` and `BrokerRetryPublisher` in `apps/worker`. `RetryPolicy` only picks the tier; if it has none for an attempt the budget allows, the handler throws instead of guessing. A retry is the job with `attemptNo + 1`, published through the default exchange to the tier queue of its delay and confirmed before the ack; the `webhook-id` (the `delivery_id`) is unchanged. A retry that cannot be published throws `RequeueError`, which keeps the original job queued. The worker declares the retry topology from the policy and consumes `retry.ready` with its own prefetch. New settings: `TIME_SCALE` (default 1), `RETRY_MIN_DELAY_MS` (default 0) and `WORKER_RETRY_PREFETCH` (default 5). A failure on the 8th attempt is logged and acked, with no retry: Task 19 added its DLQ entry. An infrastructure error (a failed log write or endpoint lookup) still dead-letters the job, as before.
 
 **Acceptance Criteria:**
 
@@ -337,19 +337,19 @@ On a failed attempt: log it, publish to the retry tier, wait for the confirm, th
 - [x] A worker killed mid-delivery loses no job and the receiver sees the same `webhook-id`
 - [x] The test fails if the ack happens before the retry publish
 
-### Task 19: Exhausted deliveries land in the DLQ ⬜
+### Task 19: Exhausted deliveries land in the DLQ ✅
 
 **Original Story:** 22
 **Scope:** `worker`, `messaging`
 **Blocked by:** Task 18
 
 **What to build:**
-After the 8th failed attempt, publish the job to the DLQ with the failure reason.
+After the 8th failed attempt, publish the job to the DLQ with the failure reason. Built as `RetryPublisher.deadLetter` and `BrokerRetryPublisher` in `apps/worker`: the job, as it was, goes to the dead-letter exchange with `x-failure-kind: delivery-exhausted` (`DELIVERY_EXHAUSTED` in `@wdp/messaging`) and `x-failure-reason` (the failure kind, then any HTTP status and error, e.g. `http_error: HTTP 503`), confirmed before the ack. A dead letter that cannot be published throws `RequeueError`, which keeps the job queued. An exhausted dispatch carries `dispatch-exhausted` instead, and a job the consumer rejected carries no failure kind.
 
 **Acceptance Criteria:**
 
-- [ ] A permanently failing endpoint ends with one DLQ entry carrying the reason
-- [ ] An exhausted delivery can be told apart from a dead-lettered event in the shared DLQ
+- [x] A permanently failing endpoint ends with one DLQ entry carrying the reason
+- [x] An exhausted delivery can be told apart from a dead-lettered event in the shared DLQ
 
 ### Task 20: Poison messages ✅
 
