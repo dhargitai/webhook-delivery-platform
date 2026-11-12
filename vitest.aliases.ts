@@ -1,6 +1,12 @@
 import { fileURLToPath } from 'node:url';
 
-const libs = ['domain', 'core', 'messaging', 'observability'] as const;
+const libs = [
+  'domain',
+  'core',
+  'messaging',
+  'observability',
+  'common',
+] as const;
 
 const fromRoot = (path: string) =>
   fileURLToPath(new URL(path, import.meta.url));
