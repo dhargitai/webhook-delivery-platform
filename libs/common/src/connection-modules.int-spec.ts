@@ -210,6 +210,30 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
     }
   });
 
+  it('builds the Redis client with the options it is given', async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const reachable = config;
+    config = { ...config, redisUrl: 'redis://127.0.0.1:1' };
+    try {
+      const moduleRef = await start(
+        RedisModule.forRootAsync({
+          inject: [CONFIG],
+          url: (c: TestConfig) => c.redisUrl,
+          clientOptions: { maxRetriesPerRequest: 1 },
+        }),
+      );
+      const client = moduleRef.get<Redis>(REDIS);
+
+      // With the default of 20 retries, a command waits through about 10 s
+      // of reconnect attempts before it is rejected.
+      const startedAt = Date.now();
+      await expect(client.ping()).rejects.toThrow();
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      config = reachable;
+    }
+  });
+
   it('makes the connections injectable from any module', async () => {
     const USES = Symbol('USES');
     class ConsumerModule {}

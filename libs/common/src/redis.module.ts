@@ -6,9 +6,16 @@ import {
   Module,
   type OnApplicationShutdown,
 } from '@nestjs/common';
-import { Redis } from 'ioredis';
+import { Redis, type RedisOptions } from 'ioredis';
 import type { ConnectionModuleOptions } from './connection-module-options.js';
 import { REDIS } from './tokens.js';
+
+export interface RedisModuleOptions<
+  Deps extends unknown[],
+> extends ConnectionModuleOptions<Deps> {
+  /** Passed to the client as they are, the URL's settings aside. */
+  clientOptions?: RedisOptions;
+}
 
 @Injectable()
 class RedisCloser implements OnApplicationShutdown {
@@ -44,7 +51,7 @@ class RedisCloser implements OnApplicationShutdown {
 @Module({})
 export class RedisModule {
   static forRootAsync<Deps extends unknown[]>(
-    options: ConnectionModuleOptions<Deps>,
+    options: RedisModuleOptions<Deps>,
   ): DynamicModule {
     return {
       module: RedisModule,
@@ -55,7 +62,10 @@ export class RedisModule {
           inject: options.inject,
           useFactory: (...deps: Deps) => {
             const logger = new Logger('Redis');
-            const redis = new Redis(options.url(...deps));
+            const redis = new Redis(
+              options.url(...deps),
+              options.clientOptions ?? {},
+            );
             // Without a listener, ioredis reports every failed connection
             // attempt as an unhandled error event.
             redis.on('error', (error: Error) =>

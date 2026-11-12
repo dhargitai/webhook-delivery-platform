@@ -45,6 +45,14 @@ import { WorkerRunner } from './worker-runner.js';
     RedisModule.forRootAsync({
       inject: [workerConfig.KEY],
       url: (config: ConfigType<typeof workerConfig>) => config.redisUrl,
+      // While Redis is unreachable, ioredis would hold each command through
+      // up to 20 reconnect attempts (about 10 s, then up to 2 s apart) before
+      // rejecting it, and every delivery would wait that long, twice, before
+      // failing open. Instead a command is rejected at once while the client
+      // is not connected, and one already sent when the connection drops is
+      // rejected after a single reconnect attempt. The price: a delivery in
+      // the moment before the first connection at boot fails open too.
+      clientOptions: { enableOfflineQueue: false, maxRetriesPerRequest: 1 },
     }),
   ],
   controllers: [StatusController],
