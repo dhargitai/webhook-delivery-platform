@@ -10,8 +10,7 @@ import {
 import { Redis } from 'ioredis';
 import { Kysely } from 'kysely';
 import { ingestConfig } from '../config/ingest.config.js';
-import { DATABASE } from '@wdp/common';
-import { REDIS } from '../infrastructure/tokens.js';
+import { DATABASE, REDIS } from '@wdp/common';
 import { EventsController } from './events.controller.js';
 import { IngestRateLimitGuard } from './ingest-rate-limit.guard.js';
 
