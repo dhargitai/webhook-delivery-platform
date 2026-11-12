@@ -202,4 +202,141 @@ describe('CircuitBreaker (real Redis)', () => {
     expect(await cb.allow(dead)).toEqual({ kind: 'deny' });
     expect(await cb.allow(healthy)).toEqual({ kind: 'allow' });
   });
+
+  describe('half-open', () => {
+    // Short enough to wait out in a test; the lease is longer than the
+    // cooldown, as the PRD's 15 s lease is longer than the 10 s HTTP timeout.
+    const fast: Partial<CircuitBreakerOptions> = {
+      baseCooldownMs: 200,
+      probeLeaseMs: 300,
+    };
+
+    const trip = (cb: CircuitBreaker, id: string) =>
+      recordMany(cb, id, 'failure', 20);
+
+    /** Asks once and expects to be elected the probe. */
+    const probeToken = async (cb: CircuitBreaker, id: string) => {
+      const decision = await cb.allow(id);
+      if (decision.kind !== 'probe') {
+        throw new Error(`expected a probe, got ${decision.kind}`);
+      }
+      return decision.token;
+    };
+
+    it('elects exactly one probe once the cooldown has passed', async () => {
+      const a = breaker(fast);
+      const b = breaker(fast, NO_JITTER, redisB);
+      const id = endpoint();
+      await trip(a, id);
+
+      expect(await a.allow(id)).toEqual({ kind: 'deny' });
+      await sleep(250);
+
+      const decisions = await Promise.all(
+        Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? a : b).allow(id)),
+      );
+
+      expect(decisions.filter((d) => d.kind === 'probe')).toHaveLength(1);
+      expect(decisions.filter((d) => d.kind === 'deny')).toHaveLength(19);
+      expect(await redis.hget(stateKey(id), 'state')).toBe('half_open');
+    });
+
+    it('closes on a successful probe and starts again from level 0', async () => {
+      const cb = breaker(fast);
+      const id = endpoint();
+      await trip(cb, id);
+      await sleep(250);
+
+      await cb.record(id, 'success', await probeToken(cb, id));
+
+      expect(await cb.allow(id)).toEqual({ kind: 'allow' });
+      expect(await redis.exists(stateKey(id))).toBe(0);
+
+      // A new trip is a first trip again: the base cooldown, not a doubled one.
+      await trip(cb, id);
+      expect(await redis.hget(stateKey(id), 'level')).toBe('0');
+      expect(await remainingCooldownMs(id)).toBeLessThanOrEqual(200);
+    });
+
+    it('reopens on a failed probe with twice the cooldown', async () => {
+      const cb = breaker(fast);
+      const id = endpoint();
+      await trip(cb, id);
+      await sleep(250);
+
+      await cb.record(id, 'failure', await probeToken(cb, id));
+
+      expect(await cb.allow(id)).toEqual({ kind: 'deny' });
+      expect(await redis.hgetall(stateKey(id))).toMatchObject({
+        state: 'open',
+        level: '1',
+      });
+      const remaining = await remainingCooldownMs(id);
+      expect(remaining).toBeGreaterThan(400 - 100);
+      expect(remaining).toBeLessThanOrEqual(400);
+    });
+
+    it('caps the cooldown, then jitters it, and stops raising the level at the maximum', async () => {
+      // Jitter at its top (1.2x). Applied before the cap, a doubled cooldown
+      // would come out at exactly the 150 ms cap; applied after, at 180 ms.
+      const cb = breaker(
+        { baseCooldownMs: 100, maxCooldownMs: 150, maxLevel: 1 },
+        () => 0.999_999,
+      );
+      const id = endpoint();
+
+      await trip(cb, id);
+      const first = await remainingCooldownMs(id);
+      expect(first).toBeGreaterThan(120 - 50);
+      expect(first).toBeLessThanOrEqual(120);
+
+      for (let failedProbes = 1; failedProbes <= 2; failedProbes++) {
+        await sleep(200);
+        await cb.record(id, 'failure', await probeToken(cb, id));
+
+        expect(await redis.hget(stateKey(id), 'level')).toBe('1');
+        const remaining = await remainingCooldownMs(id);
+        expect(remaining).toBeGreaterThan(160);
+        expect(remaining).toBeLessThanOrEqual(180);
+      }
+    });
+
+    it('ignores results that do not carry the probe token', async () => {
+      const cb = breaker(fast);
+      const id = endpoint();
+      await trip(cb, id);
+      await sleep(250);
+      await probeToken(cb, id);
+
+      // Late results of calls that started before the trip.
+      await cb.record(id, 'success');
+      await cb.record(id, 'failure');
+      await cb.record(id, 'success', randomUUID());
+
+      expect(await redis.hget(stateKey(id), 'state')).toBe('half_open');
+      expect(await cb.allow(id)).toEqual({ kind: 'deny' });
+    });
+
+    it('elects a new probe once a dead probe lease has run out', async () => {
+      const cb = breaker(fast);
+      const id = endpoint();
+      await trip(cb, id);
+      await sleep(250);
+
+      // The winner's worker dies: it never records.
+      const dead = await probeToken(cb, id);
+      expect(await cb.allow(id)).toEqual({ kind: 'deny' });
+
+      await sleep(350);
+      const next = await probeToken(cb, id);
+      expect(next).not.toBe(dead);
+
+      // The dead probe's result, should it still arrive, no longer counts.
+      await cb.record(id, 'success', dead);
+      expect(await redis.hget(stateKey(id), 'state')).toBe('half_open');
+
+      await cb.record(id, 'success', next);
+      expect(await cb.allow(id)).toEqual({ kind: 'allow' });
+    });
+  });
 });

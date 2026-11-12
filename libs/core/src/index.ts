@@ -39,6 +39,7 @@ export {
 } from './safe-http-client.js';
 export {
   breakerOutcome,
+  type BreakerDecision,
   type BreakerOutcome,
   CircuitBreaker,
   type CircuitBreakerOptions,
