@@ -1,8 +1,8 @@
 **Status:** Approved
 **Date:** 2026-11-12
 **Author:** David Hargitai
-**Version:** 1.14
-**Source PRD:** PRD-v1.5
+**Version:** 1.15
+**Source PRD:** PRD-v1.6
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -365,18 +365,18 @@ Quorum queues with `delivery-limit` 5, dead-lettering to the DLQ. Every working 
 - [x] A message that keeps killing its consumers ends up in the DLQ after the first delivery plus 5 redeliveries
 - [x] A message whose handler throws is dead-lettered once instead of looping
 
-### Task 21: Worker graceful shutdown ⬜
+### Task 21: Worker graceful shutdown ✅
 
 **Original Story:** 24
 **Scope:** `worker`
 **Blocked by:** Task 14
 
 **What to build:**
-On SIGTERM, cancel consumers, finish in-flight work within the 30 s grace period, then close the channel.
+On SIGTERM, cancel consumers, finish in-flight work within the 30 s grace period, then close the channel. Built by earlier tasks and proven here: `main.ts` enables Nest's shutdown hooks, `WorkerRunner` stops every consumer in `onModuleDestroy` (`Consumer.stop()` cancels, then awaits the handlers in flight, each of which acks or parks its retry) and closes its channels in `beforeApplicationShutdown`, and `@wdp/common` closes the connections in `onApplicationShutdown`, the last phase. There is no worker-side deadline: Compose's `stop_grace_period: 30s` bounds the wait, and a job still running at the SIGKILL is redelivered, not lost. The tests stop the worker with Nest's `close()`, which is what SIGTERM runs; the real signal path is checked by hand (`docker compose stop worker` mid-delivery).
 
 **Acceptance Criteria:**
 
-- [ ] An in-flight delivery completes and is acked before exit
+- [x] An in-flight delivery completes and is acked before exit
 
 ### Phase 3: Resilience and fairness
 
