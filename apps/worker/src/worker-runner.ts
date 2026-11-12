@@ -1,12 +1,13 @@
 import {
   Inject,
   Injectable,
+  type BeforeApplicationShutdown,
   Logger,
   type OnApplicationBootstrap,
-  type OnApplicationShutdown,
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { type ConfigType } from '@nestjs/config';
+import { BROKER, DATABASE } from '@wdp/common';
 import {
   type AttemptOutcome,
   type Database,
@@ -29,22 +30,22 @@ import {
 } from '@wdp/messaging';
 import type { ConsumeMessage } from 'amqplib';
 import { Kysely } from 'kysely';
-import type { MongoClient } from 'mongodb';
 import { BrokerRetryPublisher } from './broker-retry-publisher.js';
 import { workerConfig } from './config/worker.config.js';
 import { JobMessageHandler } from './job-message-handler.js';
 import { type RetryHandled, RetryHandler } from './retry-handler.js';
-import { ATTEMPT_LOG, BROKER, DATABASE, MONGO } from './tokens.js';
+import { ATTEMPT_LOG } from './tokens.js';
 
 /**
- * Owns the worker's lifecycle. Nest runs shutdown hooks in a fixed order,
- * which is what makes the stop graceful: the consumers stop first
- * (onModuleDestroy), finishing the jobs they already hold, and only then are
- * the connections closed (onApplicationShutdown).
+ * Owns the worker's lifecycle. Nest runs each shutdown phase for the whole app
+ * before the next, which is what makes the stop graceful: the consumers stop
+ * first (onModuleDestroy), finishing the jobs they already hold, then the
+ * worker's channels close (beforeApplicationShutdown), and only then does
+ * `@wdp/common` close the connections (onApplicationShutdown).
  */
 @Injectable()
 export class WorkerRunner
-  implements OnApplicationBootstrap, OnModuleDestroy, OnApplicationShutdown
+  implements OnApplicationBootstrap, OnModuleDestroy, BeforeApplicationShutdown
 {
   private readonly logger = new Logger(WorkerRunner.name);
   private readonly consumers: Consumer[] = [];
@@ -53,7 +54,6 @@ export class WorkerRunner
   constructor(
     @Inject(DATABASE) private readonly db: Kysely<Database>,
     @Inject(BROKER) private readonly broker: BrokerConnection,
-    @Inject(MONGO) private readonly mongo: MongoClient,
     @Inject(ATTEMPT_LOG) private readonly attemptLog: MongoAttemptLog,
     @Inject(workerConfig.KEY)
     private readonly config: ConfigType<typeof workerConfig>,
@@ -143,11 +143,8 @@ export class WorkerRunner
     this.logger.log('worker stopped');
   }
 
-  async onApplicationShutdown(): Promise<void> {
+  async beforeApplicationShutdown(): Promise<void> {
     await Promise.all(this.channels.map((channel) => channel.close()));
-    await this.broker.close();
-    await this.mongo.close();
-    await this.db.destroy();
   }
 
   private logHandled({ job, outcome, next }: RetryHandled): void {

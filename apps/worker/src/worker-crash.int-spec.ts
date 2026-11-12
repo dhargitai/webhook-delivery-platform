@@ -7,6 +7,7 @@ import {
 } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { BROKER, DATABASE, MONGO } from '@wdp/common';
 import {
   createDatabase,
   type Database,
@@ -27,7 +28,6 @@ import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import type { Kysely } from 'kysely';
 import { type Collection, type Document, MongoClient } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { BROKER, DATABASE, MONGO } from './tokens.js';
 
 const LANES = 4;
 

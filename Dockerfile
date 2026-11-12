@@ -19,6 +19,7 @@ COPY libs/domain/package.json libs/domain/
 COPY libs/core/package.json libs/core/
 COPY libs/messaging/package.json libs/messaging/
 COPY libs/observability/package.json libs/observability/
+COPY libs/common/package.json libs/common/
 COPY apps/api/package.json apps/api/
 COPY apps/relay/package.json apps/relay/
 COPY apps/dispatcher/package.json apps/dispatcher/

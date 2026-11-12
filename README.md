@@ -102,6 +102,7 @@ libs/
   core/             @wdp/core: deep modules (retry policy, signing, SSRF guard, breaker, ...)
   messaging/        @wdp/messaging: broker contracts and topology
   observability/    @wdp/observability: logging and metrics
+  common/           @wdp/common: Nest modules for the shared connections (Postgres, RabbitMQ, MongoDB)
 test/                 system-level e2e specs that span several apps
 migrations/           SQL schema (node-pg-migrate)
 Dockerfile            one image for every service, Node 24 runtime
@@ -113,7 +114,7 @@ tsconfig.base.json  shared compiler options and @wdp/* path aliases
 tsconfig.json       root typecheck over apps/ and libs/
 ```
 
-`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, endpoint signing secrets, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, the signature service, the retry policy, the safe HTTP client, the SSRF guard, the delivery attempt with its endpoint target lookup, and the attempt log with its Mongo adapter). `@wdp/messaging` holds the RabbitMQ layer (topology including the retry tier and delay queues, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `migrations/` holds the SQL schema. The remaining apps (gateway, dashboard) are added as the phases land.
+`@wdp/domain` and `@wdp/core` hold the logic written so far (idempotent ingest, request hashing, API keys, the token-bucket rate limiter, lane routing, endpoint URL rules, endpoint signing secrets, the Kysely event store, the migration runner, the outbox relay with its loop, the dispatcher with its subscription lookup, the signature service, the retry policy, the safe HTTP client, the SSRF guard, the delivery attempt with its endpoint target lookup, and the attempt log with its Mongo adapter). `@wdp/messaging` holds the RabbitMQ layer (topology including the retry tier and delay queues, confirmed publisher, consumer, message contracts); `@wdp/observability` is still empty. `@wdp/common` holds the Nest modules that open, log and close the connections the services share, and is the only library that imports Nest. `migrations/` holds the SQL schema. The remaining apps (gateway, dashboard) are added as the phases land.
 
 ### How workspace libraries resolve
 

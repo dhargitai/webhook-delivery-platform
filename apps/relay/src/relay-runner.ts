@@ -1,12 +1,13 @@
 import {
   Inject,
   Injectable,
+  type BeforeApplicationShutdown,
   Logger,
   type OnApplicationBootstrap,
-  type OnApplicationShutdown,
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { type ConfigType } from '@nestjs/config';
+import { BROKER, DATABASE } from '@wdp/common';
 import {
   type Database,
   KyselyOutboxStore,
@@ -22,16 +23,17 @@ import {
 import { Kysely } from 'kysely';
 import { BrokerEventPublisher } from './broker-event-publisher.js';
 import { relayConfig } from './config/relay.config.js';
-import { BROKER, DATABASE } from './tokens.js';
 
 /**
- * Owns the relay's lifecycle. Nest runs shutdown hooks in a fixed order, which
- * is what makes the stop graceful: the loop stops first (onModuleDestroy) and
- * only then are the connections closed (onApplicationShutdown).
+ * Owns the relay's lifecycle. Nest runs each shutdown phase for the whole app
+ * before the next, which is what makes the stop graceful: the loop stops
+ * first (onModuleDestroy), then the relay's channel closes
+ * (beforeApplicationShutdown), and only then does `@wdp/common` close the
+ * connections (onApplicationShutdown).
  */
 @Injectable()
 export class RelayRunner
-  implements OnApplicationBootstrap, OnModuleDestroy, OnApplicationShutdown
+  implements OnApplicationBootstrap, OnModuleDestroy, BeforeApplicationShutdown
 {
   private readonly logger = new Logger(RelayRunner.name);
   private loop: RelayLoop | undefined;
@@ -82,10 +84,8 @@ export class RelayRunner
     this.logger.log('relay stopped');
   }
 
-  async onApplicationShutdown(): Promise<void> {
+  async beforeApplicationShutdown(): Promise<void> {
     await this.confirmChannel?.close();
-    await this.broker.close();
-    await this.db.destroy();
   }
 
   private report(error: unknown): void {
