@@ -1,4 +1,4 @@
-import type { DeliveryJob, RetryPolicy } from '@wdp/core';
+import type { AttemptOutcome, DeliveryJob, RetryPolicy } from '@wdp/core';
 import { Delivery } from '@wdp/domain';
 import { RequeueError } from '@wdp/messaging';
 import type { ConsumeMessage } from 'amqplib';
@@ -31,16 +31,17 @@ export interface RetryHandlerOptions {
  * Decides what a failed attempt leads to, instead of letting it end the job.
  *
  * It runs after the attempt and its log record, in this order: publish the
- * retry, wait for the broker's confirm, resolve. The consumer acks only after
- * it resolves, so a crash in between redelivers the job and the receiver sees
- * the same `webhook-id` again: a duplicate, never a loss.
+ * retry (or the dead letter), wait for the broker's confirm, resolve. The
+ * consumer acks only after it resolves, so a crash in between redelivers the
+ * job and the receiver sees the same `webhook-id` again: a duplicate, never a
+ * loss.
  *
  * - The `Delivery` state machine decides retry or give up, from the budget.
  *   The policy only says how long a retry waits.
- * - A failure on the last attempt resolves without a retry (the job is acked;
- *   Task 19 gives it a DLQ entry).
- * - A retry that cannot be published throws `RequeueError`, which keeps the
- *   original job queued.
+ * - A failure on the last attempt is dead-lettered with its reason instead of
+ *   retried.
+ * - A retry or dead letter that cannot be published throws `RequeueError`,
+ *   which keeps the original job queued.
  * - Anything the inner handler throws, a malformed message or a log that
  *   cannot be written included, passes through and dead-letters the job.
  */
@@ -73,6 +74,13 @@ export class RetryHandler {
       case 'attempt-succeeded':
         return { ...handled, next: { kind: 'none' } };
       case 'delivery-exhausted':
+        // Only a failed attempt reaches here: success and skip return earlier.
+        if (outcome.kind === 'failed') {
+          await this.park(
+            () => this.retries.deadLetter(job, failureReason(outcome)),
+            'could not dead-letter the exhausted delivery',
+          );
+        }
         return { ...handled, next: { kind: 'exhausted' } };
       case 'attempt-failed':
         return {
@@ -98,14 +106,39 @@ export class RetryHandler {
         `attempt ${failedAttemptNo} has attempts left but the retry schedule has no tier for it`,
       );
     }
-    try {
-      await this.retries.retry(
-        { ...job, attemptNo: nextAttemptNo },
-        decision.delay,
-      );
-    } catch (error) {
-      throw new RequeueError('could not schedule the retry', { cause: error });
-    }
+    await this.park(
+      () =>
+        this.retries.retry(
+          { ...job, attemptNo: nextAttemptNo },
+          decision.delay,
+        ),
+      'could not schedule the retry',
+    );
     return { kind: 'retry', attemptNo: nextAttemptNo, delayMs: decision.delay };
   }
+
+  /** A publish that fails keeps the original job queued: retried, never lost. */
+  private async park(
+    publish: () => Promise<void>,
+    failure: string,
+  ): Promise<void> {
+    try {
+      await publish();
+    } catch (error) {
+      throw new RequeueError(failure, { cause: error });
+    }
+  }
+}
+
+/** Why the last attempt failed, in words: the failure kind, then any status and error. */
+function failureReason(
+  outcome: Extract<AttemptOutcome, { kind: 'failed' }>,
+): string {
+  return [
+    outcome.failure,
+    outcome.status === undefined ? undefined : `HTTP ${outcome.status}`,
+    outcome.error,
+  ]
+    .filter((part) => part !== undefined)
+    .join(': ');
 }

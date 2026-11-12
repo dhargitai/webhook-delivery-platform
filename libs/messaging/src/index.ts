@@ -24,6 +24,7 @@ export {
   type EventPublished,
 } from './messages.js';
 export {
+  DELIVERY_EXHAUSTED,
   DISPATCH_ATTEMPT_HEADER,
   DISPATCH_EXHAUSTED,
   EVENT_PUBLISHED_ROUTING_KEY,

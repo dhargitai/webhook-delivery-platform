@@ -2,7 +2,10 @@ import type { DeliveryJob } from '@wdp/core';
 import {
   ConfirmPublisher,
   decodeMessage,
+  DELIVERY_EXHAUSTED,
   deliveryRequestedSchema,
+  FAILURE_KIND_HEADER,
+  FAILURE_REASON_HEADER,
   type PublishChannel,
   PublishFailedError,
   topologyNames,
@@ -103,5 +106,46 @@ describe('BrokerRetryPublisher', () => {
     await expect(publisher.retry(job, 5_000)).rejects.toBeInstanceOf(
       PublishFailedError,
     );
+  });
+
+  describe('deadLetter', () => {
+    it('sends the job to the dead-letter exchange', async () => {
+      await publisher.deadLetter(job, 'http_error: HTTP 503');
+
+      expect(channel.sent).toHaveLength(1);
+      expect(channel.sent[0]).toMatchObject({
+        exchange: names.deadLetterExchange,
+        routingKey: '',
+      });
+    });
+
+    it('sends a job that decodes to the one it was given, attempt number included', async () => {
+      await publisher.deadLetter(job, 'http_error: HTTP 503');
+
+      const body = channel.sent[0]?.content;
+      expect(body && decodeMessage(body, deliveryRequestedSchema)).toEqual(job);
+    });
+
+    it('marks the entry as an exhausted delivery, with the reason', async () => {
+      await publisher.deadLetter(job, 'http_error: HTTP 503');
+
+      expect(channel.sent[0]?.options).toMatchObject({
+        messageId: 'delivery-1',
+        correlationId: 'event-1',
+        type: 'delivery.requested',
+        headers: {
+          [FAILURE_KIND_HEADER]: DELIVERY_EXHAUSTED,
+          [FAILURE_REASON_HEADER]: 'http_error: HTTP 503',
+        },
+      });
+    });
+
+    it('fails when the broker does not confirm', async () => {
+      channel.nack = true;
+
+      await expect(
+        publisher.deadLetter(job, 'http_error: HTTP 503'),
+      ).rejects.toBeInstanceOf(PublishFailedError);
+    });
   });
 });

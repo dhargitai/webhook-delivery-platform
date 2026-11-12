@@ -59,6 +59,14 @@ class FakeRetryPublisher extends RetryPublisher {
     if (this.failWith) throw this.failWith;
     this.retried.push({ job, delayMs });
   }
+
+  readonly deadLettered: { job: DeliveryJob; reason: string }[] = [];
+
+  async deadLetter(job: DeliveryJob, reason: string): Promise<void> {
+    await this.gate;
+    if (this.failWith) throw this.failWith;
+    this.deadLettered.push({ job, reason });
+  }
 }
 
 const message = {} as ConsumeMessage;
@@ -177,22 +185,110 @@ describe('RetryHandler', () => {
     expect(handled.next).toEqual({ kind: 'none' });
   });
 
-  it('gives up after the last attempt: no retry, and it resolves so the job is acked', async () => {
+  it.each<AttemptOutcome>([
+    { kind: 'delivered', status: 200, latencyMs: 4, snippet: 'ok' },
+    { kind: 'skipped', reason: 'endpoint_missing' },
+  ])('dead-letters nothing for a $kind last attempt', async (outcome) => {
+    inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS };
+    inner.outcome = outcome;
+
+    await handler.handle(message);
+
+    expect(retries.deadLettered).toEqual([]);
+  });
+
+  it('dead-letters the job after the last attempt, with the reason, and retries nothing', async () => {
     inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS };
 
     const handled = await handler.handle(message);
 
     expect(retries.retried).toEqual([]);
+    expect(retries.deadLettered).toEqual([
+      { job: inner.job, reason: 'http_error: HTTP 503' },
+    ]);
     expect(handled.next).toEqual({ kind: 'exhausted' });
   });
 
-  it('still retries the attempt before the last', async () => {
+  it.each<{ outcome: AttemptOutcome; reason: string }>([
+    {
+      outcome: {
+        kind: 'failed',
+        failure: 'timeout',
+        error: 'no response within 10000 ms',
+        latencyMs: 10_000,
+      },
+      reason: 'timeout: no response within 10000 ms',
+    },
+    {
+      outcome: {
+        kind: 'failed',
+        failure: 'ssrf_blocked',
+        error: 'resolves to a loopback address',
+        latencyMs: 1,
+      },
+      reason: 'ssrf_blocked: resolves to a loopback address',
+    },
+    {
+      outcome: {
+        kind: 'failed',
+        failure: 'redirect',
+        status: 302,
+        error: 'redirects are not followed',
+        latencyMs: 3,
+      },
+      reason: 'redirect: HTTP 302: redirects are not followed',
+    },
+    {
+      outcome: { kind: 'failed', failure: 'network_error', latencyMs: 2 },
+      reason: 'network_error',
+    },
+  ])('gives the reason "$reason"', async ({ outcome, reason }) => {
+    inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS };
+    inner.outcome = outcome;
+
+    await handler.handle(message);
+
+    expect(retries.deadLettered.map((dead) => dead.reason)).toEqual([reason]);
+  });
+
+  it('does not resolve before the broker has confirmed the dead letter, so the ack waits for it', async () => {
+    inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS };
+    retries.hold();
+    let resolved = false;
+    const handled = handler.handle(message).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resolved).toBe(false);
+
+    retries.release?.();
+    await handled;
+    expect(resolved).toBe(true);
+    expect(retries.deadLettered).toHaveLength(1);
+  });
+
+  it('asks for the original to be kept when the dead letter cannot be published', async () => {
+    inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS };
+    retries.failWith = new Error('no confirm');
+
+    const rejected = handler.handle(message);
+
+    await expect(rejected).rejects.toBeInstanceOf(RequeueError);
+    await expect(rejected).rejects.toMatchObject({
+      cause: retries.failWith,
+    });
+  });
+
+  it('still retries the attempt before the last, and dead-letters nothing', async () => {
     inner.job = { ...baseJob, attemptNo: MAX_ATTEMPTS - 1 };
 
     await handler.handle(message);
 
     expect(retries.retried).toHaveLength(1);
     expect(retries.retried[0]?.job.attemptNo).toBe(MAX_ATTEMPTS);
+    expect(retries.deadLettered).toEqual([]);
   });
 
   it('follows the budget it is given, not the policy’s alone', async () => {
@@ -206,6 +302,7 @@ describe('RetryHandler', () => {
     const handled = await handler.handle(message);
 
     expect(handled.next).toEqual({ kind: 'exhausted' });
+    expect(retries.deadLettered).toHaveLength(1);
   });
 
   it('refuses to guess when the policy and the budget disagree', async () => {
