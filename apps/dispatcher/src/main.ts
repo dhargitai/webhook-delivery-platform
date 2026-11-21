@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { startService } from '@wdp/common';
 import { DispatcherModule } from './dispatcher.module.js';
 
 async function bootstrap() {
@@ -9,4 +10,4 @@ async function bootstrap() {
   // flight, then disconnect.
   app.enableShutdownHooks();
 }
-await bootstrap();
+startService(bootstrap);

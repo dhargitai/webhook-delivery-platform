@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { startService } from '@wdp/common';
 import { RelayModule } from './relay.module.js';
 
 async function bootstrap() {
@@ -8,4 +9,4 @@ async function bootstrap() {
   // SIGTERM and SIGINT then run the shutdown hooks: finish the batch in flight, then disconnect.
   app.enableShutdownHooks();
 }
-await bootstrap();
+startService(bootstrap);

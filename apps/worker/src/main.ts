@@ -1,6 +1,7 @@
 import { type ConfigType } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { startService } from '@wdp/common';
 import { workerConfig } from './config/worker.config.js';
 import { WorkerModule } from './worker.module.js';
 
@@ -13,4 +14,4 @@ async function bootstrap() {
   const { port } = app.get<ConfigType<typeof workerConfig>>(workerConfig.KEY);
   await app.listen(port);
 }
-await bootstrap();
+startService(bootstrap);
