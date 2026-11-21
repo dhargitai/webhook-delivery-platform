@@ -261,6 +261,38 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
     }
   });
 
+  it('shuts down cleanly after the broker connection dropped', async () => {
+    const logged = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    const proxy = await startTcpProxy(config.rabbitmqUrl);
+    const direct = config;
+    config = { ...config, rabbitmqUrl: proxy.url };
+    try {
+      await start(broker());
+      proxy.dropConnections();
+      await eventually(() => {
+        expect(logged).toHaveBeenCalledWith(
+          'broker connection error',
+          expect.any(String),
+        );
+      });
+      // Nest does not reject `close()` when a shutdown hook throws: it logs
+      // the error through the static `Logger.error`.
+      const shutdownErrors = vi
+        .spyOn(Logger, 'error')
+        .mockImplementation(() => undefined);
+
+      await app?.close();
+      app = undefined;
+
+      expect(shutdownErrors).not.toHaveBeenCalled();
+    } finally {
+      config = direct;
+      await proxy.close();
+    }
+  });
+
   it('closes the MongoDB client when the app shuts down', async () => {
     const client = (await start(mongo())).get<MongoClient>(MONGO);
     await client.db('admin').command({ ping: 1 });
