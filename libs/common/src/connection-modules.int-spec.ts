@@ -1,9 +1,10 @@
+import net from 'node:net';
 import { type DynamicModule, Logger } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import type { Database } from '@wdp/core';
 import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
 import type { BrokerConnection } from '@wdp/messaging';
-import { eventually } from '@wdp/messaging/testing';
+import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import { type Kysely, sql } from 'kysely';
 import type { Redis } from 'ioredis';
 import type { MongoClient } from 'mongodb';
@@ -29,6 +30,60 @@ interface TestConfig {
   rabbitmqUrl: string;
   mongoUrl: string;
   redisUrl: string;
+}
+
+/** A TCP proxy in front of a server, whose connections a test can cut. */
+interface TcpProxy {
+  /** `target` with its host and port replaced by the proxy's. */
+  url: string;
+  /** Closes every proxied connection, as a broker restart or a network drop would. */
+  dropConnections(): void;
+  close(): Promise<void>;
+}
+
+async function startTcpProxy(target: string): Promise<TcpProxy> {
+  const upstream = new URL(target);
+  const sockets = new Set<net.Socket>();
+  const track = (socket: net.Socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  };
+  const server = net.createServer((client) => {
+    const remote = net.connect(Number(upstream.port), upstream.hostname);
+    track(client);
+    track(remote);
+    client.pipe(remote);
+    remote.pipe(client);
+    // One side failing ends the pair; the error itself is what the test causes.
+    const drop = () => {
+      client.destroy();
+      remote.destroy();
+    };
+    client.on('error', drop);
+    remote.on('error', drop);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('the proxy is not listening on a TCP port');
+  }
+  const url = new URL(target);
+  url.hostname = '127.0.0.1';
+  url.port = String(address.port);
+
+  const dropConnections = () => {
+    for (const socket of sockets) socket.destroy();
+  };
+  return {
+    url: url.toString(),
+    dropConnections,
+    close: async () => {
+      dropConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    },
+  };
 }
 
 /** Stands in for an app's config namespace, as the factories' only input. */
@@ -154,6 +209,56 @@ describe('connection modules (real Postgres, RabbitMQ and MongoDB)', () => {
     app = undefined;
 
     await expect(connection.createChannel()).rejects.toThrow();
+  });
+
+  it('logs a channel the broker closed, and keeps the connection', async () => {
+    // Silenced: the error is expected, and its stack would clutter the run.
+    const logged = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    const connection = (await start(broker())).get<BrokerConnection>(BROKER);
+    const channel = await connection.createChannel();
+
+    // The broker answers a check of a missing queue by closing the channel
+    // with a 404, which amqplib also emits as the channel's `error` event.
+    await expect(
+      channel.checkQueue(`${testingNamespace()}.missing`),
+    ).rejects.toThrow(/NOT_FOUND/);
+
+    await eventually(() => {
+      expect(logged).toHaveBeenCalledWith(
+        'broker connection error',
+        expect.any(String),
+      );
+    });
+    // Only that channel is gone: an unheard channel error would have been
+    // thrown inside amqplib and taken the whole connection down.
+    await (await connection.createChannel()).close();
+  });
+
+  it('logs a broker connection that dropped', async () => {
+    const logged = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    const proxy = await startTcpProxy(config.rabbitmqUrl);
+    const direct = config;
+    config = { ...config, rabbitmqUrl: proxy.url };
+    try {
+      const connection = (await start(broker())).get<BrokerConnection>(BROKER);
+      await (await connection.createChannel()).close();
+
+      proxy.dropConnections();
+
+      await eventually(() => {
+        expect(logged).toHaveBeenCalledWith(
+          'broker connection error',
+          expect.any(String),
+        );
+      });
+    } finally {
+      config = direct;
+      await proxy.close();
+    }
   });
 
   it('closes the MongoDB client when the app shuts down', async () => {
