@@ -7,11 +7,13 @@ import {
 } from './endpoint-limiter.js';
 
 describe('DEFAULT_ENDPOINT_LIMITER', () => {
-  // Locked by the PRD: changing either number is a deliberate decision.
-  it('holds the PRD concurrency cap and lease', () => {
+  // Locked by the PRD: changing any of these numbers is a deliberate decision.
+  it('holds the PRD concurrency cap, lease and rate', () => {
     expect(DEFAULT_ENDPOINT_LIMITER).toEqual({
       maxConcurrent: 20,
       leaseMs: 30_000,
+      ratePerSecond: 20,
+      burst: 40,
     });
   });
 });
@@ -29,13 +31,25 @@ describe('EndpointLimiter options', () => {
     ['a negative lease', { leaseMs: -1 }],
     ['a NaN lease', { leaseMs: Number.NaN }],
     ['an infinite lease', { leaseMs: Number.POSITIVE_INFINITY }],
+    ['a zero rate', { ratePerSecond: 0 }],
+    ['a negative rate', { ratePerSecond: -1 }],
+    ['a NaN rate', { ratePerSecond: Number.NaN }],
+    ['an infinite rate', { ratePerSecond: Number.POSITIVE_INFINITY }],
+    ['a zero burst', { burst: 0 }],
+    ['a fractional burst', { burst: 1.5 }],
   ])('refuses %s', (_, options) => {
     expect(() => new EndpointLimiter(redis, options)).toThrow(RangeError);
   });
 
   it('accepts a partial override and the edges of the valid ranges', () => {
     expect(
-      () => new EndpointLimiter(redis, { maxConcurrent: 1, leaseMs: 1 }),
+      () =>
+        new EndpointLimiter(redis, {
+          maxConcurrent: 1,
+          leaseMs: 1,
+          ratePerSecond: 0.001,
+          burst: 1,
+        }),
     ).not.toThrow();
   });
 });

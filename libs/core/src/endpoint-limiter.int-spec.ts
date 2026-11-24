@@ -91,6 +91,134 @@ describe('EndpointLimiter (real Redis)', () => {
     expect((await limiter.acquire(other)).kind).toBe('permit');
   });
 
+  describe('rate', () => {
+    // So slow that no token comes back while a test runs: a slow Redis round
+    // trip can never refill the bucket between two acquires.
+    const NO_REFILL = 0.1;
+    // A cap the rate tests never reach, so only the bucket can deny.
+    const NO_CAP = 100;
+
+    it('grants the burst and denies the next acquire as rate limited', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 5,
+      });
+      const id = endpoint();
+
+      const granted = await acquireMany(limiter, id, 5);
+      expect(granted.every((r) => r.kind === 'permit')).toBe(true);
+
+      expect(await limiter.acquire(id)).toEqual({
+        kind: 'denied',
+        reason: 'rate_limited',
+      });
+    });
+
+    it('refills the bucket over time', async () => {
+      // 10/s: a token every 100 ms, so 250 ms leaves a wide margin.
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: 10,
+        burst: 1,
+      });
+      const id = endpoint();
+      await limiter.acquire(id);
+      expect((await limiter.acquire(id)).kind).toBe('denied');
+
+      await sleep(250);
+
+      expect((await limiter.acquire(id)).kind).toBe('permit');
+    });
+
+    it('takes no slot when the rate denies the acquire', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 1,
+      });
+      const id = endpoint();
+      await limiter.acquire(id);
+
+      expect((await limiter.acquire(id)).kind).toBe('denied');
+
+      // The PRD-style key layout is fixed, which is why the test may read it.
+      expect(await redis.zcard(`el:{${id}}:slots`)).toBe(1);
+    });
+
+    it('uses no token when the concurrency cap denies the acquire', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: 1,
+        ratePerSecond: NO_REFILL,
+        burst: 2,
+      });
+      const id = endpoint();
+      const held = permitOf(await limiter.acquire(id));
+      expect(await limiter.acquire(id)).toEqual({
+        kind: 'denied',
+        reason: 'concurrency_cap',
+      });
+
+      await limiter.release(held);
+
+      // Only the second token is left; a cap denial that spent it would
+      // make this one rate limited.
+      expect((await limiter.acquire(id)).kind).toBe('permit');
+    });
+
+    it('grants exactly the burst when acquires race from two connections', async () => {
+      const options = {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 5,
+      };
+      const limiterA = new EndpointLimiter(redis, options);
+      const limiterB = new EndpointLimiter(redisB, options);
+      const id = endpoint();
+
+      const results = await Promise.all(
+        Array.from({ length: 10 }, (_, i) =>
+          (i % 2 === 0 ? limiterA : limiterB).acquire(id),
+        ),
+      );
+
+      expect(results.filter((r) => r.kind === 'permit')).toHaveLength(5);
+      expect(
+        results.filter(
+          (r) => r.kind === 'denied' && r.reason === 'rate_limited',
+        ),
+      ).toHaveLength(5);
+    });
+
+    it('keeps each endpoint to its own bucket', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 1,
+      });
+      const drained = endpoint();
+      const other = endpoint();
+      await limiter.acquire(drained);
+
+      expect((await limiter.acquire(other)).kind).toBe('permit');
+    });
+
+    it('leaves no bucket behind for an endpoint that goes quiet', async () => {
+      // A full refill takes burst / rate = 2 s; the key may live 1 s more.
+      const limiter = new EndpointLimiter(redis, {
+        ratePerSecond: 10,
+        burst: 20,
+      });
+      const id = endpoint();
+
+      await limiter.acquire(id);
+
+      const ttl = await redis.pttl(`el:{${id}}:bucket`);
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(3_000);
+    });
+  });
+
   describe('leases', () => {
     // Short enough to wait out, long enough that a slow Redis round trip
     // never ends one early.
