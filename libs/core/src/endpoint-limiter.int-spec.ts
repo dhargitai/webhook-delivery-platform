@@ -7,6 +7,8 @@ import {
   type Permit,
 } from './endpoint-limiter.js';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe('EndpointLimiter (real Redis)', () => {
   let redis: Redis;
   // A second connection so concurrent acquires really race on the server.
@@ -87,5 +89,69 @@ describe('EndpointLimiter (real Redis)', () => {
     await acquireMany(limiter, full, 20);
 
     expect((await limiter.acquire(other)).kind).toBe('permit');
+  });
+
+  describe('leases', () => {
+    // Short enough to wait out, long enough that a slow Redis round trip
+    // never ends one early.
+    const LEASE_MS = 200;
+    const outlastLease = () => sleep(LEASE_MS * 2);
+
+    it('frees the slot of a permit that is never released', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: 2,
+        leaseMs: LEASE_MS,
+      });
+      const id = endpoint();
+      await acquireMany(limiter, id, 2);
+      expect((await limiter.acquire(id)).kind).toBe('denied');
+
+      await outlastLease();
+
+      expect((await limiter.acquire(id)).kind).toBe('permit');
+    });
+
+    it('frees an expired permit’s slot while a newer permit keeps the key alive', async () => {
+      // The key's TTL follows the newest lease, so here only the per-permit
+      // expiry can free the older slot.
+      const leaseMs = 300;
+      const limiter = new EndpointLimiter(redis, { maxConcurrent: 2, leaseMs });
+      const id = endpoint();
+      await limiter.acquire(id);
+      await sleep(200);
+      await limiter.acquire(id);
+      // 100 ms after the first lease ended, 100 ms before the second ends.
+      await sleep(200);
+
+      expect((await limiter.acquire(id)).kind).toBe('permit');
+    });
+
+    it('does not free another holder’s slot when an expired permit is released', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: 1,
+        leaseMs: LEASE_MS,
+      });
+      const id = endpoint();
+      const late = permitOf(await limiter.acquire(id));
+      await outlastLease();
+      // The lease ended, so B legitimately holds the only slot now.
+      permitOf(await limiter.acquire(id));
+
+      await limiter.release(late);
+
+      expect((await limiter.acquire(id)).kind).toBe('denied');
+    });
+
+    it('leaves no key behind for an endpoint that goes quiet', async () => {
+      const limiter = new EndpointLimiter(redis, { leaseMs: LEASE_MS });
+      const id = endpoint();
+
+      await limiter.acquire(id);
+
+      // The PRD-style key layout is fixed, which is why the test may read it.
+      const ttl = await redis.pttl(`el:{${id}}:slots`);
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(LEASE_MS);
+    });
   });
 });

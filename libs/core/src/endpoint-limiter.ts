@@ -29,8 +29,9 @@ export type AcquireResult =
  * workers could both see 19 holders and both take the 20th slot.
  *
  * The slots are a sorted set, one member per permit token, scored by the
- * time its lease ends. A token per permit, not a counter, lets a release
- * free its own slot and no other.
+ * time its lease ends. A token per permit, not a counter, lets each permit
+ * expire on its own, and lets a release free its own slot and no other: a
+ * worker whose lease ran out must not free the slot someone else took.
  *
  * Time comes from Redis (`TIME`), so workers with skewed clocks agree on
  * when a lease ends.
@@ -44,10 +45,16 @@ local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local maxConcurrent = tonumber(ARGV[2])
 local leaseMs = tonumber(ARGV[3])
 
+-- A permit whose lease ended was leaked (its worker died or never
+-- released it): it stops holding a slot here, lazily, with no timer.
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', nowMs)
 if redis.call('ZCARD', KEYS[1]) >= maxConcurrent then
   return 0
 end
 redis.call('ZADD', KEYS[1], nowMs + leaseMs, ARGV[1])
+-- The newest lease ends last, so the key outlives every member and an
+-- endpoint that goes quiet leaves nothing behind.
+redis.call('PEXPIRE', KEYS[1], leaseMs)
 return 1
 `;
 
