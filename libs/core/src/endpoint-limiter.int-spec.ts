@@ -219,6 +219,62 @@ describe('EndpointLimiter (real Redis)', () => {
     });
   });
 
+  describe('per-endpoint override', () => {
+    const NO_REFILL = 0.1;
+    const NO_CAP = 100;
+
+    it('denies sooner under a lower burst than the limiter’s', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 5,
+      });
+      const id = endpoint();
+      const override = { burst: 2 };
+
+      await limiter.acquire(id, override);
+      await limiter.acquire(id, override);
+
+      expect(await limiter.acquire(id, override)).toEqual({
+        kind: 'denied',
+        reason: 'rate_limited',
+      });
+    });
+
+    it('grants more under a higher burst than the limiter’s', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 3,
+      });
+      const id = endpoint();
+
+      const results: AcquireResult[] = [];
+      for (let i = 0; i < 8; i++) {
+        results.push(await limiter.acquire(id, { burst: 8 }));
+      }
+
+      expect(results.every((r) => r.kind === 'permit')).toBe(true);
+    });
+
+    it('refills at the overriding rate', async () => {
+      const limiter = new EndpointLimiter(redis, {
+        maxConcurrent: NO_CAP,
+        ratePerSecond: NO_REFILL,
+        burst: 1,
+      });
+      const id = endpoint();
+      // 10/s: a token every 100 ms, where the limiter's own rate needs 10 s.
+      const override = { ratePerSecond: 10 };
+      await limiter.acquire(id, override);
+      expect((await limiter.acquire(id, override)).kind).toBe('denied');
+
+      await sleep(250);
+
+      expect((await limiter.acquire(id, override)).kind).toBe('permit');
+    });
+  });
+
   describe('leases', () => {
     // Short enough to wait out, long enough that a slow Redis round trip
     // never ends one early.

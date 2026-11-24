@@ -4,6 +4,7 @@ import {
   DEFAULT_ENDPOINT_LIMITER,
   EndpointLimiter,
   type EndpointLimiterOptions,
+  type EndpointRate,
 } from './endpoint-limiter.js';
 
 describe('DEFAULT_ENDPOINT_LIMITER', () => {
@@ -51,5 +52,16 @@ describe('EndpointLimiter options', () => {
           burst: 1,
         }),
     ).not.toThrow();
+  });
+
+  // The client never connects, so an override that reached Redis would fail
+  // with a connection error instead.
+  it.each<[string, Partial<EndpointRate>]>([
+    ['a zero burst', { burst: 0 }],
+    ['a negative rate', { ratePerSecond: -1 }],
+  ])('rejects an acquire with %s as its override', async (_, rate) => {
+    const limiter = new EndpointLimiter(redis);
+
+    await expect(limiter.acquire('endpoint', rate)).rejects.toThrow(RangeError);
   });
 });

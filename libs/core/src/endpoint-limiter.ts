@@ -12,6 +12,12 @@ export interface EndpointLimiterOptions {
   burst: number;
 }
 
+/** The part of the limits one endpoint may override: its rate. */
+export type EndpointRate = Pick<
+  EndpointLimiterOptions,
+  'ratePerSecond' | 'burst'
+>;
+
 // PRD locked parameters (section 6, "Fairness and limits").
 export const DEFAULT_ENDPOINT_LIMITER: EndpointLimiterOptions = {
   maxConcurrent: 20,
@@ -131,9 +137,21 @@ export class EndpointLimiter {
     });
   }
 
-  async acquire(endpointId: string): Promise<AcquireResult> {
+  /**
+   * `rate` overrides the limiter's rate for this endpoint. The bucket is the
+   * endpoint's whatever the override, so a lower burst than before only
+   * clamps the tokens it holds.
+   */
+  async acquire(
+    endpointId: string,
+    rate: Partial<EndpointRate> = {},
+  ): Promise<AcquireResult> {
+    const { maxConcurrent, leaseMs } = this.options;
+    const { ratePerSecond, burst } = { ...this.options, ...rate };
+    // Checked before Redis: a bad stored override must fail loudly, not
+    // reach the script as a NaN or a zero rate.
+    validateRate({ ratePerSecond, burst });
     const token = randomUUID();
-    const { maxConcurrent, leaseMs, ratePerSecond, burst } = this.options;
     const taken = await this.redis.endpointAcquire(
       slotsKey(endpointId),
       bucketKey(endpointId),
@@ -170,7 +188,7 @@ function bucketKey(endpointId: string): string {
 }
 
 function validate(options: EndpointLimiterOptions): void {
-  const { maxConcurrent, leaseMs, ratePerSecond, burst } = options;
+  const { maxConcurrent, leaseMs } = options;
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
     throw new RangeError(
       `maxConcurrent must be a positive integer, got ${maxConcurrent}`,
@@ -179,6 +197,10 @@ function validate(options: EndpointLimiterOptions): void {
   if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
     throw new RangeError(`leaseMs must be a positive number, got ${leaseMs}`);
   }
+  validateRate(options);
+}
+
+function validateRate({ ratePerSecond, burst }: EndpointRate): void {
   if (!Number.isFinite(ratePerSecond) || ratePerSecond <= 0) {
     throw new RangeError(
       `ratePerSecond must be a positive number, got ${ratePerSecond}`,

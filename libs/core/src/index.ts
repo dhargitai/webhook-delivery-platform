@@ -51,6 +51,7 @@ export {
   DEFAULT_ENDPOINT_LIMITER,
   EndpointLimiter,
   type EndpointLimiterOptions,
+  type EndpointRate,
   type Permit,
 } from './endpoint-limiter.js';
 export {
