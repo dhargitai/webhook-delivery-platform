@@ -1,7 +1,7 @@
 **Status:** Approved
-**Date:** 2026-11-12
+**Date:** 2026-11-24
 **Author:** David Hargitai
-**Version:** 1.17
+**Version:** 1.18
 **Source PRD:** PRD-v1.8
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -422,7 +422,7 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 - [x] A dead endpoint stops receiving calls once the circuit opens
 - [x] Attempt numbers are not consumed while the circuit is open
 
-### Task 25: EndpointLimiter concurrency cap ⬜
+### Task 25: EndpointLimiter concurrency cap ✅
 
 **Original Story:** 19
 **Scope:** `core`, Redis
@@ -433,8 +433,8 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 
 **Acceptance Criteria:**
 
-- [ ] Against real Redis, the 21st concurrent acquire is denied
-- [ ] A leaked permit expires
+- [x] Against real Redis, the 21st concurrent acquire is denied
+- [x] A leaked permit expires
 
 ### Task 26: Per-endpoint token bucket ⬜
 
@@ -457,7 +457,7 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 **Blocked by:** Tasks 18, 26
 
 **What to build:**
-Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it.
+Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it. The concurrency cap exists since Task 25: `EndpointLimiter` in `@wdp/core` (`acquire`/`release`, keys `el:{endpointId}:slots`).
 
 **Acceptance Criteria:**
 
