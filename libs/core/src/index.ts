@@ -47,6 +47,13 @@ export {
   type EndpointCircuit,
 } from './circuit-breaker.js';
 export {
+  type AcquireResult,
+  DEFAULT_ENDPOINT_LIMITER,
+  EndpointLimiter,
+  type EndpointLimiterOptions,
+  type Permit,
+} from './endpoint-limiter.js';
+export {
   type CircuitErrorReporter,
   FailOpenCircuitBreaker,
 } from './fail-open-circuit-breaker.js';
