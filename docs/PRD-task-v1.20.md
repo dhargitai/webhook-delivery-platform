@@ -1,8 +1,8 @@
 **Status:** Approved
-**Date:** 2026-11-24
+**Date:** 2026-11-25
 **Author:** David Hargitai
-**Version:** 1.19
-**Source PRD:** PRD-v1.8
+**Version:** 1.20
+**Source PRD:** PRD-v1.9
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -450,19 +450,19 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 - [x] Requests over the rate are denied
 - [x] A per-endpoint override is honoured
 
-### Task 27: Limiter in the worker ⬜
+### Task 27: Limiter in the worker ✅
 
 **Original Story:** 19
 **Scope:** `worker`
 **Blocked by:** Tasks 18, 26
 
 **What to build:**
-Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it. The limiter exists since Tasks 25 and 26: `EndpointLimiter` in `@wdp/core` (`acquire(endpointId, rate?)`/`release`, keys `el:{endpointId}:slots` and `:bucket`, denial reasons `concurrency_cap` and `rate_limited`). The per-endpoint rate override needs a home: nullable `endpoints` columns read through `EndpointTargetLookup`, with null columns left out of `rate` (a present `undefined` is rejected).
+Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it. The limiter exists since Tasks 25 and 26: `EndpointLimiter` in `@wdp/core` (`acquire(endpointId, rate?)`/`release`, keys `el:{endpointId}:slots` and `:bucket`, denial reasons `concurrency_cap` and `rate_limited`). The per-endpoint rate override needs a home: nullable `endpoints` columns read through `EndpointTargetLookup`, with null columns left out of `rate` (a present `undefined` is rejected). Built as migration 0005 (`rate_per_second` and `burst`, both nullable, with checks that hold the values the limiter accepts, NaN and infinity rejected, so a stored override can never fail a delivery), read by `KyselyEndpointTargetLookup` into `EndpointTarget.rate`, and a gate in `DeliveryAttempt` (`@wdp/core`): after the breaker, so a job deferred by an open circuit takes no slot and spends no token, `acquire(endpointId, target.rate)`, then the call and `record`, then `release` in a `finally`, so the slot is held for the call only. A denial is a `deferred` outcome with reason `concurrency_cap` or `rate_limited`, parked by `RetryHandler` as before. The worker wraps the limiter in `FailOpenEndpointLimiter`: an `acquire` error lets the call through and a failed `release` is left to the 30 s lease, both logged. The limiter keeps the PRD values and is provided under `ENDPOINT_LIMITER`. There is no API to set an override yet (Task 40); it is set in Postgres.
 
 **Acceptance Criteria:**
 
-- [ ] A hanging endpoint holds at most 20 slots
-- [ ] Other endpoints on the same worker keep delivering
+- [x] A hanging endpoint holds at most 20 slots
+- [x] Other endpoints on the same worker keep delivering
 
 ### Task 28: Fresh versus retry consumer split ⬜
 
@@ -640,7 +640,7 @@ A minimal React app accessible in the development environment where a seeded use
 **Blocked by:** Task 39
 
 **What to build:**
-Screens to create, list, edit and delete endpoints and subscriptions. Editing needs a new API update route for an endpoint's description and `status` (Task 4 has none).
+Screens to create, list, edit and delete endpoints and subscriptions. Editing needs a new API update route for an endpoint's description and `status` (Task 4 has none), which could also set its rate override (Task 27).
 
 **Acceptance Criteria:**
 
