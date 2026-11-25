@@ -52,12 +52,17 @@ export {
   EndpointLimiter,
   type EndpointLimiterOptions,
   type EndpointRate,
+  type EndpointSlots,
   type Permit,
 } from './endpoint-limiter.js';
 export {
   type CircuitErrorReporter,
   FailOpenCircuitBreaker,
 } from './fail-open-circuit-breaker.js';
+export {
+  FailOpenEndpointLimiter,
+  type LimiterErrorReporter,
+} from './fail-open-endpoint-limiter.js';
 export {
   MAX_ATTEMPTS,
   RetryPolicy,

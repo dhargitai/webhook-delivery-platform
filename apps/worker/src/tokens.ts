@@ -4,3 +4,5 @@ export const ATTEMPT_LOG = Symbol('ATTEMPT_LOG');
 // A token rather than the class, so tests can swap in a breaker with shorter
 // timings than the PRD's.
 export const CIRCUIT_BREAKER = Symbol('CIRCUIT_BREAKER');
+// A token for the same reason: tests can swap in a limiter with a smaller cap.
+export const ENDPOINT_LIMITER = Symbol('ENDPOINT_LIMITER');

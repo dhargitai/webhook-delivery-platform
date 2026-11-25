@@ -1,8 +1,16 @@
-import { breakerOutcome, type EndpointCircuit } from '../circuit-breaker.js';
+import {
+  type BreakerDecision,
+  breakerOutcome,
+  type EndpointCircuit,
+} from '../circuit-breaker.js';
 import type { DeliveryJob } from '../dispatch/delivery-publisher.js';
+import type { EndpointSlots } from '../endpoint-limiter.js';
 import type { HttpFailureKind, HttpResult } from '../safe-http-client.js';
 import type { SignatureService } from '../signature-service.js';
-import type { EndpointTargetLookup } from './endpoint-target-lookup.js';
+import type {
+  EndpointTarget,
+  EndpointTargetLookup,
+} from './endpoint-target-lookup.js';
 
 /** What happened to one attempt. A failed HTTP call is an outcome, not a throw. */
 export type AttemptOutcome =
@@ -17,7 +25,10 @@ export type AttemptOutcome =
     }
   | { kind: 'skipped'; reason: 'endpoint_missing' | 'endpoint_disabled' }
   /** The endpoint was not called now, but will be later: put the job back. */
-  | { kind: 'deferred'; reason: 'circuit_open' };
+  | {
+      kind: 'deferred';
+      reason: 'circuit_open' | 'concurrency_cap' | 'rate_limited';
+    };
 
 export interface DeliveryAttemptDeps {
   lookup: EndpointTargetLookup;
@@ -30,15 +41,18 @@ export interface DeliveryAttemptDeps {
   };
   /** The endpoint's circuit: asked before the call, told its result after. */
   breaker: EndpointCircuit;
+  /** The endpoint's concurrency cap and rate: a slot is held for the call. */
+  limiter: EndpointSlots;
   signatures: SignatureService;
   now: () => Date;
 }
 
 /**
- * One try at delivering one job: read the endpoint, ask its circuit, sign the
- * event and POST it, then tell the circuit how the call went. It decides
- * nothing about what a failure means (retry, give up); it only reports what
- * happened, so that policy can change without touching it.
+ * One try at delivering one job: read the endpoint, ask its circuit, take one
+ * of its slots, sign the event and POST it, tell the circuit how the call
+ * went, then give the slot back. It decides nothing about what a failure
+ * means (retry, give up); it only reports what happened, so that policy can
+ * change without touching it.
  */
 export class DeliveryAttempt {
   constructor(private readonly deps: DeliveryAttemptDeps) {}
@@ -59,6 +73,28 @@ export class DeliveryAttempt {
       return { kind: 'deferred', reason: 'circuit_open' };
     }
 
+    // After the circuit: a job deferred by an open circuit takes no slot and
+    // spends no token, so an outage does not drain the endpoint's bucket. A
+    // half-open endpoint has had no calls through its cooldown, so its probe
+    // finds the slots free and the bucket full.
+    const slot = await this.deps.limiter.acquire(job.endpointId, target.rate);
+    if (slot.kind === 'denied') {
+      return { kind: 'deferred', reason: slot.reason };
+    }
+    try {
+      return await this.call(job, target, decision);
+    } finally {
+      // Held for the call only, not for what the caller does with its result.
+      await this.deps.limiter.release(slot.permit);
+    }
+  }
+
+  /** Signs and sends the job, and tells the circuit how the call went. */
+  private async call(
+    job: DeliveryJob,
+    target: EndpointTarget,
+    decision: Exclude<BreakerDecision, { kind: 'deny' }>,
+  ): Promise<AttemptOutcome> {
     // Serialised once: these exact bytes are signed and sent.
     const body = JSON.stringify({
       id: job.eventId,

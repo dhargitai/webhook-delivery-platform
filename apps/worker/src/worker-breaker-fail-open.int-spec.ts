@@ -97,7 +97,7 @@ describe('a worker whose Redis is unreachable (real Postgres, RabbitMQ and Mongo
     vi.restoreAllMocks();
   });
 
-  it('delivers without the breaker, and without waiting for Redis to come back', async () => {
+  it('delivers without the breaker or the limiter, and without waiting for Redis to come back', async () => {
     const tenant = await db
       .insertInto('tenants')
       .values({ name: `tenant-${randomUUID()}` })

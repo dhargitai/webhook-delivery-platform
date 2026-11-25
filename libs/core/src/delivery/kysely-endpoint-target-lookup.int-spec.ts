@@ -40,10 +40,14 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
       url = 'https://hooks.acme.test/in',
       secret = generateEndpointSecret(),
       status = 'active',
+      ratePerSecond = null,
+      burst = null,
     }: {
       url?: string;
       secret?: string;
       status?: 'active' | 'disabled';
+      ratePerSecond?: number | null;
+      burst?: number | null;
     } = {},
   ): Promise<string> {
     const row = await db
@@ -53,6 +57,8 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
         url,
         signing_secret: secret,
         status,
+        rate_per_second: ratePerSecond,
+        burst,
       })
       .returning('id')
       .executeTakeFirstOrThrow();
@@ -71,7 +77,30 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
       url: 'https://hooks.acme.test/exact',
       signingSecret: secret,
       status: 'active',
+      // No override stored: the limiter's defaults apply.
+      rate: {},
     });
+  });
+
+  it('returns the endpoint’s stored rate override', async () => {
+    const tenantId = await createTenant();
+    const id = await addEndpoint(tenantId, { ratePerSecond: 2.5, burst: 10 });
+
+    expect((await lookup.find(tenantId, id))?.rate).toEqual({
+      ratePerSecond: 2.5,
+      burst: 10,
+    });
+  });
+
+  it('leaves an unset part of the override out, rather than undefined', async () => {
+    const tenantId = await createTenant();
+    const id = await addEndpoint(tenantId, { burst: 3 });
+
+    const rate = (await lookup.find(tenantId, id))?.rate;
+
+    expect(rate).toEqual({ burst: 3 });
+    // The limiter rejects a present `undefined`, which toEqual would not see.
+    expect(rate !== undefined && 'ratePerSecond' in rate).toBe(false);
   });
 
   it('keeps each endpoint’s own secret apart', async () => {

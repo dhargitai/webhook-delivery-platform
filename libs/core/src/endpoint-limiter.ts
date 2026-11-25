@@ -114,6 +114,9 @@ declare module 'ioredis' {
   }
 }
 
+/** What a delivery needs from the limiter: take a slot, give it back. */
+export type EndpointSlots = Pick<EndpointLimiter, 'acquire' | 'release'>;
+
 /**
  * Per-endpoint limits, shared by every worker through Redis: at most
  * `maxConcurrent` deliveries to one endpoint at a time, so one slow endpoint
