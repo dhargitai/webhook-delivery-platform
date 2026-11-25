@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-24
 **Author:** David Hargitai
-**Version:** 1.18
+**Version:** 1.19
 **Source PRD:** PRD-v1.8
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -436,19 +436,19 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 - [x] Against real Redis, the 21st concurrent acquire is denied
 - [x] A leaked permit expires
 
-### Task 26: Per-endpoint token bucket ⬜
+### Task 26: Per-endpoint token bucket ✅
 
 **Original Story:** 19
 **Scope:** `core`, Redis
 **Blocked by:** Task 25
 
 **What to build:**
-20 requests/s sustained, burst 40, overridable per endpoint.
+20 requests/s sustained, burst 40, overridable per endpoint. Built into `EndpointLimiter` in `@wdp/core`: the bucket (`el:{endpointId}:bucket`) and the slots are checked in one Lua script, so a call denied by one limit neither holds a slot nor spends a token, and `acquire` returns `denied` with `concurrency_cap` or `rate_limited`. The override is `acquire(endpointId, rate?)`, a partial `EndpointRate` (`ratePerSecond`, `burst`) merged over the defaults and validated before Redis; where it is stored is Task 27's.
 
 **Acceptance Criteria:**
 
-- [ ] Requests over the rate are denied
-- [ ] A per-endpoint override is honoured
+- [x] Requests over the rate are denied
+- [x] A per-endpoint override is honoured
 
 ### Task 27: Limiter in the worker ⬜
 
@@ -457,7 +457,7 @@ A denied job is re-parked in the short delay tier without calling the endpoint a
 **Blocked by:** Tasks 18, 26
 
 **What to build:**
-Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it. The concurrency cap exists since Task 25: `EndpointLimiter` in `@wdp/core` (`acquire`/`release`, keys `el:{endpointId}:slots`).
+Over the cap or rate, park the job in the delay tier without consuming an attempt and without nack-requeue. The park path exists since Task 24 (the `deferred` outcome and `RetryPublisher.park`); this task adds the limiter's reasons to it. The limiter exists since Tasks 25 and 26: `EndpointLimiter` in `@wdp/core` (`acquire(endpointId, rate?)`/`release`, keys `el:{endpointId}:slots` and `:bucket`, denial reasons `concurrency_cap` and `rate_limited`). The per-endpoint rate override needs a home: nullable `endpoints` columns read through `EndpointTargetLookup`, with null columns left out of `rate` (a present `undefined` is rejected).
 
 **Acceptance Criteria:**
 

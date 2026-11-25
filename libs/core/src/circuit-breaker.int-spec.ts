@@ -277,27 +277,44 @@ describe('CircuitBreaker (real Redis)', () => {
     });
 
     it('caps the cooldown, then jitters it, and stops raising the level at the maximum', async () => {
-      // Jitter at its top (1.2x). Applied before the cap, a doubled cooldown
-      // would come out at exactly the 150 ms cap; applied after, at 180 ms.
+      // Jitter at its top (1.2x, floored to 599 ms). Applied before the cap, a
+      // doubled cooldown would come out at exactly the 500 ms cap, and with no
+      // cap at 719 ms.
       const cb = breaker(
-        { baseCooldownMs: 100, maxCooldownMs: 150, maxLevel: 1 },
+        { baseCooldownMs: 300, maxCooldownMs: 500, maxLevel: 1 },
         () => 0.999_999,
       );
       const id = endpoint();
 
-      await trip(cb, id);
-      const first = await remainingCooldownMs(id);
-      expect(first).toBeGreaterThan(120 - 50);
-      expect(first).toBeLessThanOrEqual(120);
+      // The cooldown starts somewhere between `before` and `after`, so it is
+      // at most `openUntil - before` and at least `openUntil - after`: a
+      // stall in the test, however long, cannot fail a correct breaker. Each
+      // bound sits halfway to the wrong value, so a broken one passes only if
+      // one call stalls for over 50 ms.
+      const cooldownOf = async (opensCircuit: () => Promise<void>) => {
+        const before = await redisNowMs();
+        await opensCircuit();
+        const after = await redisNowMs();
+        const openUntil = Number(await redis.hget(stateKey(id), 'openUntil'));
+        return { atMost: openUntil - before, atLeast: openUntil - after };
+      };
+
+      const first = await cooldownOf(() => trip(cb, id));
+      // 359 ms jittered, 300 ms without the jitter.
+      expect(first.atMost).toBeGreaterThan(330);
+      expect(first.atLeast).toBeLessThanOrEqual(359);
 
       for (let failedProbes = 1; failedProbes <= 2; failedProbes++) {
-        await sleep(200);
-        await cb.record(id, 'failure', await probeToken(cb, id));
+        // Outlasts the longest cooldown, 600 ms.
+        await sleep(700);
+        const token = await probeToken(cb, id);
+        const cooldown = await cooldownOf(() =>
+          cb.record(id, 'failure', token),
+        );
 
         expect(await redis.hget(stateKey(id), 'level')).toBe('1');
-        const remaining = await remainingCooldownMs(id);
-        expect(remaining).toBeGreaterThan(160);
-        expect(remaining).toBeLessThanOrEqual(180);
+        expect(cooldown.atMost).toBeGreaterThan(550);
+        expect(cooldown.atLeast).toBeLessThanOrEqual(660);
       }
     });
 
