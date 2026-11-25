@@ -101,6 +101,7 @@ describe('DeliveryAttempt', () => {
       url: 'https://hooks.acme.test/in',
       signingSecret: secret,
       status: 'active',
+      rate: {},
     });
     client = new RecordingClient();
     breaker = new FakeCircuit();
@@ -303,6 +304,7 @@ describe('DeliveryAttempt', () => {
       url: 'https://hooks.acme.test/in',
       signingSecret: secret,
       status: 'disabled',
+      rate: {},
     });
 
     expect(await delivery.attempt(job)).toEqual({
@@ -436,6 +438,7 @@ describe('DeliveryAttempt', () => {
         url: 'https://hooks.acme.test/in',
         signingSecret: secret,
         status: 'disabled',
+        rate: {},
       });
 
       await delivery.attempt(job);

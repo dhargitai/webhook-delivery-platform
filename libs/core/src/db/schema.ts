@@ -38,6 +38,14 @@ export interface EndpointsTable {
     'active' | 'disabled' | undefined,
     'active' | 'disabled'
   >;
+  /** Calls per second over the limiter's default; null keeps the default. */
+  rate_per_second: ColumnType<
+    number | null,
+    number | null | undefined,
+    number | null
+  >;
+  /** Bucket capacity over the limiter's default; null keeps the default. */
+  burst: ColumnType<number | null, number | null | undefined, number | null>;
   created_at: Generated<Date>;
 }
 

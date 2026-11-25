@@ -108,6 +108,42 @@ describe('database schema (real Postgres)', () => {
       ).rejects.toMatchObject({ code: '23502' });
     });
 
+    it.each(['0', '-1', 'Infinity', 'NaN'])(
+      'rejects a rate override of %s per second',
+      async (rate) => {
+        const tenantId = await insertTenant();
+
+        await expect(
+          pool.query(
+            'INSERT INTO endpoints (tenant_id, url, signing_secret, rate_per_second) VALUES ($1, $2, $3, $4)',
+            [tenantId, 'https://hooks.acme.test/in', 'whsec_test', rate],
+          ),
+        ).rejects.toMatchObject({ code: '23514' });
+      },
+    );
+
+    it('rejects a burst override below one', async () => {
+      const tenantId = await insertTenant();
+
+      await expect(
+        pool.query(
+          'INSERT INTO endpoints (tenant_id, url, signing_secret, burst) VALUES ($1, $2, $3, $4)',
+          [tenantId, 'https://hooks.acme.test/in', 'whsec_test', 0],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+
+    it('accepts an endpoint with no override, or a fractional rate', async () => {
+      const tenantId = await insertTenant();
+
+      await expect(
+        pool.query(
+          'INSERT INTO endpoints (tenant_id, url, signing_secret, rate_per_second, burst) VALUES ($1, $2, $3, $4, $5), ($1, $2, $3, NULL, NULL)',
+          [tenantId, 'https://hooks.acme.test/in', 'whsec_test', 0.5, 1],
+        ),
+      ).resolves.toMatchObject({ rowCount: 2 });
+    });
+
     it('gives endpoints that predate the signing secret their own valid one', async () => {
       const adminUrl = inject('postgresAdminUrl');
       const name = `wdp_test_${randomUUID().replaceAll('-', '')}`;

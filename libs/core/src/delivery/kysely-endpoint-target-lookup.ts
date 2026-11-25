@@ -16,7 +16,7 @@ export class KyselyEndpointTargetLookup extends EndpointTargetLookup {
   ): Promise<EndpointTarget | null> {
     const row = await this.db
       .selectFrom('endpoints')
-      .select(['url', 'signing_secret', 'status'])
+      .select(['url', 'signing_secret', 'status', 'rate_per_second', 'burst'])
       .where('id', '=', endpointId)
       // The job carries the tenant, so another tenant's id reads as missing
       // and a secret can never cross tenants.
@@ -27,6 +27,13 @@ export class KyselyEndpointTargetLookup extends EndpointTargetLookup {
       url: row.url,
       signingSecret: row.signing_secret,
       status: row.status,
+      // A null column is left out, so the limiter's default applies to it.
+      rate: {
+        ...(row.rate_per_second === null
+          ? {}
+          : { ratePerSecond: row.rate_per_second }),
+        ...(row.burst === null ? {} : { burst: row.burst }),
+      },
     };
   }
 }

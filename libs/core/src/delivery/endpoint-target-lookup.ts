@@ -1,9 +1,17 @@
+import type { EndpointRate } from '../endpoint-limiter.js';
+
 /** What the worker needs to call an endpoint. */
 export interface EndpointTarget {
   url: string;
   /** Plaintext until Task 22 encrypts it at rest. Never log it. */
   signingSecret: string;
   status: 'active' | 'disabled';
+  /**
+   * The endpoint's own rate, for the limiter to merge over its defaults. A
+   * part with no override is absent, never `undefined`: the limiter rejects
+   * a present `undefined`. Empty when nothing is overridden.
+   */
+  rate: Partial<EndpointRate>;
 }
 
 /**
