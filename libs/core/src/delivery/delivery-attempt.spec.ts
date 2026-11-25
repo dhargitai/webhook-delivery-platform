@@ -5,6 +5,12 @@ import type {
   EndpointCircuit,
 } from '../circuit-breaker.js';
 import type { DeliveryJob } from '../dispatch/delivery-publisher.js';
+import type {
+  AcquireResult,
+  EndpointRate,
+  EndpointSlots,
+  Permit,
+} from '../endpoint-limiter.js';
 import { generateEndpointSecret } from '../endpoint-secret.js';
 import type { HttpFailureKind, HttpResult } from '../safe-http-client.js';
 import { SignatureService } from '../signature-service.js';
@@ -43,6 +49,7 @@ class FakeCircuit implements EndpointCircuit {
     outcome: BreakerOutcome;
     probeToken?: string;
   }[] = [];
+  recordFailsWith?: Error;
 
   async allow(endpointId: string): Promise<BreakerDecision> {
     this.asked.push(endpointId);
@@ -54,7 +61,34 @@ class FakeCircuit implements EndpointCircuit {
     outcome: BreakerOutcome,
     probeToken?: string,
   ): Promise<void> {
+    if (this.recordFailsWith) throw this.recordFailsWith;
     this.recorded.push({ endpointId, outcome, probeToken });
+  }
+}
+
+/** Grants a permit unless told to deny, and keeps track of what is held. */
+class FakeSlots implements EndpointSlots {
+  denyWith?: 'concurrency_cap' | 'rate_limited';
+  readonly acquired: { endpointId: string; rate?: Partial<EndpointRate> }[] =
+    [];
+  readonly released: Permit[] = [];
+  readonly held = new Set<string>();
+  private issued = 0;
+
+  async acquire(
+    endpointId: string,
+    rate?: Partial<EndpointRate>,
+  ): Promise<AcquireResult> {
+    this.acquired.push({ endpointId, rate });
+    if (this.denyWith) return { kind: 'denied', reason: this.denyWith };
+    const permit = { endpointId, token: `permit-${++this.issued}` };
+    this.held.add(permit.token);
+    return { kind: 'permit', permit };
+  }
+
+  async release(permit: Permit): Promise<void> {
+    this.released.push(permit);
+    this.held.delete(permit.token);
   }
 }
 
@@ -66,6 +100,8 @@ class RecordingClient {
     latencyMs: 12,
     snippet: 'ok',
   };
+  /** Runs while the request is in flight, before it answers. */
+  duringCall?: () => void;
 
   async post(
     url: string,
@@ -73,6 +109,7 @@ class RecordingClient {
     body: string,
   ): Promise<HttpResult> {
     this.sent.push({ url, headers, body });
+    this.duringCall?.();
     return this.result;
   }
 }
@@ -92,6 +129,7 @@ describe('DeliveryAttempt', () => {
   let lookup: FakeLookup;
   let client: RecordingClient;
   let breaker: FakeCircuit;
+  let limiter: FakeSlots;
   let clock: Date;
   let delivery: DeliveryAttempt;
 
@@ -105,11 +143,13 @@ describe('DeliveryAttempt', () => {
     });
     client = new RecordingClient();
     breaker = new FakeCircuit();
+    limiter = new FakeSlots();
     clock = new Date('2026-11-11T12:00:00.500Z');
     delivery = new DeliveryAttempt({
       lookup,
       client,
       breaker,
+      limiter,
       signatures,
       now: () => clock,
     });
@@ -452,6 +492,106 @@ describe('DeliveryAttempt', () => {
 
       await expect(delivery.attempt(job)).rejects.toThrow('database is down');
       expect(breaker.asked).toEqual([]);
+    });
+  });
+
+  describe('the endpoint limiter', () => {
+    it.each(['concurrency_cap', 'rate_limited'] as const)(
+      'does not call an endpoint denied for %s, and defers the job',
+      async (reason) => {
+        limiter.denyWith = reason;
+
+        expect(await delivery.attempt(job)).toEqual({
+          kind: 'deferred',
+          reason,
+        });
+        expect(client.sent).toHaveLength(0);
+        // No call, so nothing for the circuit to learn.
+        expect(breaker.recorded).toEqual([]);
+        expect(limiter.released).toEqual([]);
+      },
+    );
+
+    it('asks for the job’s endpoint, with the endpoint’s own rate', async () => {
+      lookup.targets.set('tenant-1/endpoint-1', {
+        url: 'https://hooks.acme.test/in',
+        signingSecret: secret,
+        status: 'active',
+        rate: { burst: 3 },
+      });
+
+      await delivery.attempt(job);
+
+      expect(limiter.acquired).toEqual([
+        { endpointId: 'endpoint-1', rate: { burst: 3 } },
+      ]);
+    });
+
+    it('holds the slot while the call is in flight', async () => {
+      let heldDuringCall = 0;
+      client.duringCall = () => {
+        heldDuringCall = limiter.held.size;
+      };
+
+      await delivery.attempt(job);
+
+      expect(heldDuringCall).toBe(1);
+    });
+
+    it.each<{ name: string; result: HttpResult }>([
+      {
+        name: 'a delivered call',
+        result: { outcome: 'success', status: 200, latencyMs: 5, snippet: '' },
+      },
+      {
+        name: 'a failed call',
+        result: { outcome: 'failed', kind: 'timeout', latencyMs: 10_000 },
+      },
+    ])('gives the slot back after $name', async ({ result }) => {
+      client.result = result;
+
+      await delivery.attempt(job);
+
+      expect(limiter.released).toEqual([
+        { endpointId: 'endpoint-1', token: 'permit-1' },
+      ]);
+      expect(limiter.held.size).toBe(0);
+    });
+
+    it('gives the slot back even when the result cannot be recorded', async () => {
+      breaker.recordFailsWith = new Error('redis down');
+
+      await expect(delivery.attempt(job)).rejects.toThrow('redis down');
+      expect(limiter.held.size).toBe(0);
+    });
+
+    it('takes no slot when the circuit is open', async () => {
+      breaker.decision = { kind: 'deny' };
+
+      await delivery.attempt(job);
+
+      expect(limiter.acquired).toEqual([]);
+    });
+
+    it('takes no slot for a missing or disabled endpoint', async () => {
+      lookup.targets.clear();
+      await delivery.attempt(job);
+      lookup.targets.set('tenant-1/endpoint-1', {
+        url: 'https://hooks.acme.test/in',
+        signingSecret: secret,
+        status: 'disabled',
+        rate: {},
+      });
+      await delivery.attempt(job);
+
+      expect(limiter.acquired).toEqual([]);
+    });
+
+    it('takes no slot when the lookup fails', async () => {
+      lookup.failWith = new Error('database is down');
+
+      await expect(delivery.attempt(job)).rejects.toThrow('database is down');
+      expect(limiter.acquired).toEqual([]);
     });
   });
 });

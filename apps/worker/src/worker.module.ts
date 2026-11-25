@@ -8,13 +8,13 @@ import {
   REDIS,
   RedisModule,
 } from '@wdp/common';
-import { CircuitBreaker, MongoAttemptLog } from '@wdp/core';
+import { CircuitBreaker, EndpointLimiter, MongoAttemptLog } from '@wdp/core';
 import type { Redis } from 'ioredis';
 import type { MongoClient } from 'mongodb';
 import { envSchema } from './config/env.schema.js';
 import { workerConfig } from './config/worker.config.js';
 import { StatusController } from './status.controller.js';
-import { ATTEMPT_LOG, CIRCUIT_BREAKER } from './tokens.js';
+import { ATTEMPT_LOG, CIRCUIT_BREAKER, ENDPOINT_LIMITER } from './tokens.js';
 import { WorkerRunner } from './worker-runner.js';
 
 @Module({
@@ -40,8 +40,9 @@ import { WorkerRunner } from './worker-runner.js';
       inject: [workerConfig.KEY],
       url: (config: ConfigType<typeof workerConfig>) => config.mongoUrl,
     }),
-    // Not checked at boot: the breaker fails open, so the worker delivers
-    // while Redis is unreachable, only without the circuit's protection.
+    // Not checked at boot: the breaker and the limiter fail open, so the
+    // worker delivers while Redis is unreachable, only without their
+    // protection.
     RedisModule.forRootAsync({
       inject: [workerConfig.KEY],
       url: (config: ConfigType<typeof workerConfig>) => config.redisUrl,
@@ -72,6 +73,12 @@ import { WorkerRunner } from './worker-runner.js';
       // The PRD's thresholds and durations, in every environment: they are
       // not scaled with TIME_SCALE.
       useFactory: (redis: Redis) => new CircuitBreaker(redis),
+    },
+    {
+      provide: ENDPOINT_LIMITER,
+      inject: [REDIS],
+      // The PRD's cap, lease and rate; an endpoint may override its rate.
+      useFactory: (redis: Redis) => new EndpointLimiter(redis),
     },
     WorkerRunner,
   ],

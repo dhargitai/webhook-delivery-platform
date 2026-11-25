@@ -13,7 +13,9 @@ import {
   type Database,
   DeliveryAttempt,
   type EndpointCircuit,
+  type EndpointSlots,
   FailOpenCircuitBreaker,
+  FailOpenEndpointLimiter,
   KyselyEndpointTargetLookup,
   LaneRouter,
   MAX_ATTEMPTS,
@@ -37,7 +39,7 @@ import { BrokerRetryPublisher } from './broker-retry-publisher.js';
 import { workerConfig } from './config/worker.config.js';
 import { JobMessageHandler } from './job-message-handler.js';
 import { type RetryHandled, RetryHandler } from './retry-handler.js';
-import { ATTEMPT_LOG, CIRCUIT_BREAKER } from './tokens.js';
+import { ATTEMPT_LOG, CIRCUIT_BREAKER, ENDPOINT_LIMITER } from './tokens.js';
 
 /**
  * Owns the worker's lifecycle. Nest runs each shutdown phase for the whole app
@@ -59,6 +61,7 @@ export class WorkerRunner
     @Inject(BROKER) private readonly broker: BrokerConnection,
     @Inject(ATTEMPT_LOG) private readonly attemptLog: MongoAttemptLog,
     @Inject(CIRCUIT_BREAKER) private readonly breaker: EndpointCircuit,
+    @Inject(ENDPOINT_LIMITER) private readonly limiter: EndpointSlots,
     @Inject(workerConfig.KEY)
     private readonly config: ConfigType<typeof workerConfig>,
   ) {}
@@ -99,6 +102,17 @@ export class WorkerRunner
           error: errorText(error),
         }),
     );
+    // Likewise for the limiter: a call it cannot decide on goes ahead, and a
+    // slot it cannot give back is left to its lease.
+    const limiter = new FailOpenEndpointLimiter(
+      this.limiter,
+      (error, { operation, endpointId }) =>
+        this.logger.warn('endpoint limiter unavailable, failing open', {
+          endpoint_id: endpointId,
+          operation,
+          error: errorText(error),
+        }),
+    );
     // A failed attempt is logged, then its retry is published and confirmed,
     // and only then does the consumer ack (see `RetryHandler`).
     const retryChannel = await this.broker.createConfirmChannel();
@@ -112,6 +126,7 @@ export class WorkerRunner
             hostCheck: (hostname) => guard.blockedHostReason(hostname),
           }),
           breaker,
+          limiter,
           signatures: new SignatureService(),
           now: () => new Date(),
         }),
@@ -190,8 +205,8 @@ export class WorkerRunner
       return;
     }
     if (outcome.kind === 'deferred') {
-      // Debug: an open circuit defers every job for its endpoint, over and
-      // over, until it closes.
+      // Debug: an open circuit or a busy endpoint defers its jobs over and
+      // over, until it closes or frees up.
       this.logger.debug('delivery deferred, job parked', {
         ...context,
         reason: outcome.reason,
