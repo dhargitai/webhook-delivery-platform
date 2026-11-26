@@ -66,6 +66,17 @@ describe('topologyNames, retry and delay queues', () => {
     expect(names.parkQueue(500, 3)).toBe(`wdp.delay.500.${laneRoutingKey(3)}`);
   });
 
+  it('names one retry delay queue per delay, apart from every lane delay queue', () => {
+    const names = topologyNames();
+
+    expect(names.retryParkQueue(5000)).toBe('wdp.delay.5000.retry');
+    expect(topologyNames('t1').retryParkQueue(300)).toBe('t1.delay.300.retry');
+    expect(names.retryParkQueue(500)).not.toBe(names.retryParkQueue(1000));
+    for (const lane of [0, 1, 15]) {
+      expect(names.retryParkQueue(500)).not.toBe(names.parkQueue(500, lane));
+    }
+  });
+
   it('keeps retry.ready apart from every tier queue', () => {
     const names = topologyNames();
 

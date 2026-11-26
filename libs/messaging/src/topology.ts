@@ -118,7 +118,10 @@ export interface RetryTopologyOptions {
    * buckets one delay, and that queue is declared once.
    */
   retryDelaysMs: readonly number[];
-  /** How long a parked job waits before its lane (`RetryPolicy.parkDelayMs`). */
+  /**
+   * How long a parked job waits before its lane, or a parked retry before
+   * `retry.ready` (`RetryPolicy.parkDelayMs`).
+   */
   parkDelayMs: number;
   namespace?: string;
 }
@@ -131,7 +134,7 @@ function assertDelay(name: string, delayMs: number): void {
 
 /**
  * Declares where a delivery waits before another try, and where a parked job
- * waits before its lane. Idempotent. Declared by the worker only. Calls
+ * waits before it comes back. Idempotent. Declared by the worker only. Calls
  * `declareTopology` first, for the deliveries exchange and the lanes.
  *
  * - **Retry tiers:** one queue per delay. It has a fixed `x-message-ttl`, since
@@ -141,10 +144,13 @@ function assertDelay(name: string, delayMs: number): void {
  *   consume retries from.
  * - **Delay queues:** one per lane, so each can dead-letter by a fixed routing
  *   key straight back to its own lane.
+ * - **Retry delay queue:** one, where a parked retry waits. It dead-letters to
+ *   `retry.ready`, so a retry never comes back on a fresh lane, where it would
+ *   take the slots kept for first attempts.
  *
  * The delay is part of every queue name, because RabbitMQ refuses to change the
  * TTL of an existing queue: a new time scale makes new queues, and messages
- * still waiting in the old ones run out as before. Neither kind of queue gets a
+ * still waiting in the old ones run out as before. None of these queues gets a
  * delivery limit: nothing consumes them, messages only leave by expiring.
  */
 export async function declareRetryTopology(
@@ -194,6 +200,16 @@ export async function declareRetryTopology(
       },
     });
   }
+
+  await channel.assertQueue(names.retryParkQueue(parkDelayMs), {
+    durable: true,
+    arguments: {
+      'x-queue-type': 'quorum',
+      'x-message-ttl': parkDelayMs,
+      'x-dead-letter-exchange': names.deliveriesExchange,
+      'x-dead-letter-routing-key': RETRY_READY_ROUTING_KEY,
+    },
+  });
   return names;
 }
 
