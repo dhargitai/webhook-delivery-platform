@@ -43,6 +43,11 @@ describe('relay app (e2e)', () => {
     process.env.BROKER_NAMESPACE = namespace;
     process.env.RELAY_POLL_INTERVAL_MS = '20';
     process.env.RELAY_BATCH_SIZE = '50';
+    // A short purge interval, so a purge loop left running after close() would
+    // act within the shutdown test's wait; a small batch, so the purge spec
+    // needs several batches.
+    process.env.PURGE_INTERVAL_MS = '50';
+    process.env.PURGE_BATCH_SIZE = '2';
     ({ RelayModule } = await import('../src/relay.module.js'));
 
     db = createDatabase(testDb.url);
@@ -106,6 +111,36 @@ describe('relay app (e2e)', () => {
       .execute();
     return ids;
   }
+
+  /** Adds `count` events published as long ago as they were created, `ageDays` ago. */
+  async function addPublishedEvents(
+    count: number,
+    ageDays: number,
+  ): Promise<string[]> {
+    const ids = Array.from({ length: count }, () => randomUUID());
+    const at = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000);
+    await db
+      .insertInto('events')
+      .values(
+        ids.map((id) => ({
+          event_id: id,
+          tenant_id: tenantId,
+          idempotency_key: null,
+          request_hash: 'hash',
+          event_type: 'invoice.paid',
+          payload: JSON.stringify({}),
+          created_at: at,
+          published_at: at,
+        })),
+      )
+      .execute();
+    return ids;
+  }
+
+  const remainingIds = async () =>
+    (await db.selectFrom('events').select('event_id').execute()).map(
+      (row) => row.event_id,
+    );
 
   const unpublished = async () =>
     Number(
@@ -171,6 +206,17 @@ describe('relay app (e2e)', () => {
     });
   });
 
+  it('purges published events past the 30-day retention, in batches, and keeps younger ones', async () => {
+    await addPublishedEvents(5, 31);
+    const recent = await addPublishedEvents(1, 1);
+
+    await startRelay();
+
+    await eventually(async () => {
+      expect(await remainingIds()).toEqual(recent);
+    });
+  });
+
   it('stops cleanly when closed: no more publishing, and no run left to fail on closed connections', async () => {
     // A loop that outlived its connections would log a failed run each time
     // it woke up, so any logged error means the stop was not graceful.
@@ -187,9 +233,12 @@ describe('relay app (e2e)', () => {
       await expect(app.close()).resolves.toBeUndefined();
       running.length = 0;
       await addEvents(1);
+      const due = await addPublishedEvents(1, 31);
       await new Promise((resolve) => setTimeout(resolve, 400));
 
       expect(await unpublished()).toBe(1);
+      // The purge loop stopped too: an event already past retention stays.
+      expect(await remainingIds()).toContain(due[0]);
       expect(logged).not.toHaveBeenCalled();
     } finally {
       logged.mockRestore();
