@@ -315,11 +315,18 @@ describe('EndpointLimiter (real Redis)', () => {
         maxConcurrent: 1,
         leaseMs: LEASE_MS,
       });
+      // B's lease far outlasts the test, so however slowly the steps below
+      // run, the final acquire can only be granted if releasing A's expired
+      // permit freed B's slot.
+      const longLeased = new EndpointLimiter(redis, {
+        maxConcurrent: 1,
+        leaseMs: 30_000,
+      });
       const id = endpoint();
       const late = permitOf(await limiter.acquire(id));
       await outlastLease();
       // The lease ended, so B legitimately holds the only slot now.
-      permitOf(await limiter.acquire(id));
+      permitOf(await longLeased.acquire(id));
 
       await limiter.release(late);
 
