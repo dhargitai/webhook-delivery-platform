@@ -1,4 +1,8 @@
+import { parseKek } from '@wdp/core';
+
 const SEED_USAGE = 'usage: seed [--tenant <name>]';
+const KEK_HINT =
+  'Set it to the standard base64 of 32 random bytes, the same key the API and the worker use (generate one with `openssl rand -base64 32`).';
 
 /** `DATABASE_URL`, or an error that says what to set. */
 export function readDatabaseUrl(
@@ -11,6 +15,21 @@ export function readDatabaseUrl(
     );
   }
   return url;
+}
+
+/** `SECRETS_KEK_V1`, decoded, or an error that says what to set. Never echoes the value. */
+export function readKek(env: Record<string, string | undefined>): Buffer {
+  const value = env.SECRETS_KEK_V1;
+  if (value === undefined || value === '') {
+    throw new Error(`SECRETS_KEK_V1 is not set. ${KEK_HINT}`);
+  }
+  try {
+    return parseKek(value);
+  } catch (error) {
+    throw new Error(`SECRETS_KEK_V1 is not a valid key. ${KEK_HINT}`, {
+      cause: error,
+    });
+  }
 }
 
 export interface SeedArgs {

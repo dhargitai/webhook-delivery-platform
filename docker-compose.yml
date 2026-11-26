@@ -84,9 +84,15 @@ services:
 
   # One-shot: applies the SQL migrations, then exits. Everything that uses
   # Postgres waits for it.
+  # Applies the SQL migrations, then seals any endpoint secret still stored in
+  # plaintext (endpoints registered before secrets were encrypted at rest).
+  # Both steps are idempotent, and every service waits for this to finish.
   migrate:
     <<: *app
-    command: ['node', 'apps/ops/dist/migrate.js']
+    command:
+      - sh
+      - -c
+      - node apps/ops/dist/migrate.js && node apps/ops/dist/seal-secrets.js
     depends_on:
       postgres:
         condition: service_healthy
