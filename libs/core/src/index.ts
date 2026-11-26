@@ -81,6 +81,11 @@ export {
   type IngestResult,
 } from './idempotent-ingest.js';
 export { EventPublisher } from './outbox/event-publisher.js';
+export { EventPurger } from './outbox/event-purger.js';
+export {
+  type EventPurgerOptions,
+  KyselyEventPurger,
+} from './outbox/kysely-event-purger.js';
 export { KyselyOutboxStore } from './outbox/kysely-outbox-store.js';
 export {
   type OutboxBatch,
