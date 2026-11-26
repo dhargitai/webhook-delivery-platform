@@ -15,8 +15,9 @@ export abstract class RetryPublisher {
   abstract deadLetter(job: DeliveryJob, reason: string): Promise<void>;
 
   /**
-   * Puts `job` back on its own lane after `delayMs`, unchanged: no call was
-   * made, so it keeps the attempt number it had.
+   * Puts `job` back where it came from after `delayMs`, unchanged: a first
+   * attempt on its own lane, a retry into `retry.ready`. No call was made, so
+   * it keeps the attempt number it had.
    */
   abstract park(job: DeliveryJob, delayMs: number): Promise<void>;
 }

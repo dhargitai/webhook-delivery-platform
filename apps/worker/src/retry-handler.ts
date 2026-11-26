@@ -46,7 +46,8 @@ export interface RetryHandlerOptions {
  * - A failure on the last attempt is dead-lettered with its reason instead of
  *   retried.
  * - A deferred attempt made no call, so it uses up no attempt: the job is
- *   parked as it was, even on its last attempt, and comes back to its lane.
+ *   parked as it was, even on its last attempt, and comes back where it came
+ *   from.
  * - A retry, park or dead letter that cannot be published throws `RequeueError`,
  *   which keeps the original job queued.
  * - Anything the inner handler throws, a malformed message or a log that
