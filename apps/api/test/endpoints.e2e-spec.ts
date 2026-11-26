@@ -232,6 +232,36 @@ describe('endpoints and subscriptions (e2e)', () => {
       ]);
     });
 
+    it.each([
+      {
+        name: 'a link-local literal host',
+        url: 'https://169.254.169.254/',
+        reason: /169\.254\.169\.254 is link-local/,
+      },
+      {
+        name: 'a name that resolves to loopback',
+        url: 'https://localhost/in',
+        reason: /localhost resolves to .*loopback/,
+      },
+    ])(
+      'answers 422 url not allowed for $name, and stores nothing',
+      async ({ url, reason }) => {
+        const { key } = await t.seedTenant();
+
+        const res = await call('post', '/endpoints', key, { url });
+
+        expect(res.status).toBe(422);
+        expect(res.headers['content-type']).toMatch(PROBLEM_JSON);
+        expect(res.body).toMatchObject({
+          code: 'URL_NOT_ALLOWED',
+          detail: expect.stringMatching(reason),
+          errors: [{ path: 'url', message: expect.stringMatching(reason) }],
+        });
+        const listed = await call('get', '/endpoints', key);
+        expect(listed.body.data).toEqual([]);
+      },
+    );
+
     it('answers 422 for subscription event types that are too many or empty', async () => {
       const { key } = await t.seedTenant();
       const { id } = await createEndpoint(key);

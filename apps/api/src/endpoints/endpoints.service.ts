@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { generateEndpointSecret } from '@wdp/core';
-import { EndpointNotFoundError } from '@wdp/domain';
+import { generateEndpointSecret, SsrfGuard } from '@wdp/core';
+import { EndpointNotFoundError, UrlNotAllowedError } from '@wdp/domain';
 import {
   type Endpoint,
   EndpointsRepository,
@@ -15,9 +15,21 @@ export interface CreatedEndpoint {
 
 @Injectable()
 export class EndpointsService {
-  constructor(private readonly endpoints: EndpointsRepository) {}
+  constructor(
+    private readonly endpoints: EndpointsRepository,
+    private readonly guard: SsrfGuard,
+  ) {}
 
+  /**
+   * Refuses a target the worker would never call, so the developer hears why
+   * now instead of watching every delivery fail. Advisory only: DNS can change
+   * later, and the worker checks every connection again.
+   */
   async create(tenantId: string, input: NewEndpoint): Promise<CreatedEndpoint> {
+    const refusal = await this.guard.refusalReason(input.url);
+    if (refusal !== undefined) {
+      throw new UrlNotAllowedError(refusal);
+    }
     const secret = generateEndpointSecret();
     const endpoint = await this.endpoints.create(tenantId, input, secret);
     return { endpoint, secret };

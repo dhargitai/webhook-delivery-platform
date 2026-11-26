@@ -3,6 +3,7 @@ import {
   EndpointNotFoundError,
   IdempotencyConflictError,
   RateLimitExceededError,
+  UrlNotAllowedError,
 } from '@wdp/domain';
 import { describe, expect, it } from 'vitest';
 import { toProblem } from './problem-details.js';
@@ -40,6 +41,22 @@ describe('toProblem', () => {
       status: 422,
       code: 'IDEMPOTENCY_KEY_CONFLICT',
       detail: 'key reused',
+    });
+  });
+
+  it('maps a refused endpoint URL to 422, naming the reason on the url field', () => {
+    const problem = toProblem(
+      new UrlNotAllowedError('169.254.169.254 is link-local'),
+    );
+
+    expect(problem.status).toBe(422);
+    expect(problem.body).toEqual({
+      type: 'about:blank',
+      title: 'URL not allowed',
+      status: 422,
+      code: 'URL_NOT_ALLOWED',
+      detail: '169.254.169.254 is link-local',
+      errors: [{ path: 'url', message: '169.254.169.254 is link-local' }],
     });
   });
 

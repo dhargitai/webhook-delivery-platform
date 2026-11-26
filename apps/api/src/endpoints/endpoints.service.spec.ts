@@ -1,4 +1,5 @@
-import { EndpointNotFoundError } from '@wdp/domain';
+import { type HostResolver, SsrfGuard } from '@wdp/core';
+import { EndpointNotFoundError, UrlNotAllowedError } from '@wdp/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   type Endpoint,
@@ -69,13 +70,20 @@ class FakeEndpointsRepository extends EndpointsRepository {
   }
 }
 
+/** A resolver that finds no host, so only literal IP hosts can be refused. */
+const unresolvable: HostResolver = () =>
+  Promise.reject(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }));
+
 describe('EndpointsService', () => {
   let repo: FakeEndpointsRepository;
   let service: EndpointsService;
 
   beforeEach(() => {
     repo = new FakeEndpointsRepository();
-    service = new EndpointsService(repo);
+    service = new EndpointsService(
+      repo,
+      new SsrfGuard({ resolve: unresolvable }),
+    );
   });
 
   const input = { url: 'https://hooks.acme.test/in', description: null };
@@ -90,6 +98,42 @@ describe('EndpointsService', () => {
       url: 'https://hooks.acme.test/in',
       description: null,
       status: 'active',
+    });
+  });
+
+  describe('target check', () => {
+    it('refuses a URL whose host resolves to a blocked address, and stores nothing', async () => {
+      const guarded = new EndpointsService(
+        repo,
+        new SsrfGuard({
+          resolve: () => Promise.resolve([{ address: '10.0.0.5', family: 4 }]),
+        }),
+      );
+
+      const refused = guarded.create('tenant-a', input);
+
+      await expect(refused).rejects.toBeInstanceOf(UrlNotAllowedError);
+      await expect(refused).rejects.toMatchObject({
+        reason:
+          'hooks.acme.test resolves to 10.0.0.5, which is private network (RFC 1918)',
+      });
+      expect(repo.endpoints.size).toBe(0);
+    });
+
+    it('refuses a literal IP host that is not public', async () => {
+      await expect(
+        service.create('tenant-a', {
+          url: 'https://169.254.169.254/',
+          description: null,
+        }),
+      ).rejects.toMatchObject({ reason: '169.254.169.254 is link-local' });
+      expect(repo.endpoints.size).toBe(0);
+    });
+
+    it('creates an endpoint whose host does not resolve yet', async () => {
+      await expect(service.create('tenant-a', input)).resolves.toMatchObject({
+        endpoint: { url: input.url },
+      });
     });
   });
 
