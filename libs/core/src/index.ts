@@ -23,6 +23,17 @@ export {
   type GeneratedApiKey,
 } from './api-key.js';
 export { generateEndpointSecret } from './endpoint-secret.js';
+export { KeyProvider, type WrappedKey } from './secrets/key-provider.js';
+export {
+  EnvKeyProvider,
+  type EnvKeyProviderOptions,
+} from './secrets/env-key-provider.js';
+export {
+  type SealedSecret,
+  SecretCipher,
+  type SecretOpener,
+  secretAad,
+} from './secrets/secret-cipher.js';
 export { SignatureService } from './signature-service.js';
 export {
   isBlockedAddress,
