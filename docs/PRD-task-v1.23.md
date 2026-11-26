@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-26
 **Author:** David Hargitai
-**Version:** 1.22
+**Version:** 1.23
 **Source PRD:** PRD-v1.10
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -248,18 +248,18 @@ Resolve DNS, check the deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 ULA
 - [x] A DNS rebinding case is blocked using a fake resolver
 - [x] The connection uses the checked IP
 
-### Task 13: Explained URL rejections at registration ⬜
+### Task 13: Explained URL rejections at registration ✅
 
 **Original Story:** 6 (rest)
 **Scope:** `api`, `core`
 **Blocked by:** Tasks 4, 12
 
 **What to build:**
-Registration resolves the host and rejects disallowed targets with a reason.
+Registration resolves the host and rejects disallowed targets with a reason. Built as `SsrfGuard.refusalReason(url)` in `@wdp/core`, which reuses the connect-time guard's deny-list: a literal IP host is judged as it is (IPv6 brackets stripped), a name by every address it resolves to (one blocked address refuses it), and an allowlisted host (`SSRF_ALLOW_HOSTS`, the same list the URL rules use) is never refused. A host that does not resolve, or whose lookup fails, is accepted: the name may not exist yet, and the worker checks every connection again, so that check stays the authority. `EndpointsService.create` asks before generating the secret and throws `UrlNotAllowedError` (`@wdp/domain`, code `URL_NOT_ALLOWED`), which the problem-details filter maps to `422` with the reason in `detail` and in `errors[{ path: 'url' }]`, where the syntax rejections already are. The Zod URL rules still run first, so a malformed URL never reaches DNS. Registration now waits on the system resolver.
 
 **Acceptance Criteria:**
 
-- [ ] Registering `https://169.254.169.254/` returns `422 url_not_allowed` naming the reason
+- [x] Registering `https://169.254.169.254/` returns `422 url_not_allowed` naming the reason
 
 ### Task 14: First delivery end to end ✅
 
