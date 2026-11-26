@@ -206,6 +206,30 @@ export class SsrfGuard {
     return reason === undefined ? undefined : `${hostname} is ${reason}`;
   }
 
+  /**
+   * Why a webhook URL's target must be refused right now, or `undefined`. For
+   * registration, so a developer learns at once why deliveries would fail.
+   *
+   * A host that does not resolve (or whose lookup fails) is not refused: the
+   * name may simply not exist yet, and every delivery is checked again by
+   * `lookup` at connect time, which stays the authority.
+   */
+  async refusalReason(url: string): Promise<string | undefined> {
+    // The URL parser keeps the brackets around an IPv6 literal, which would
+    // otherwise read as a name that fails to resolve, and so be accepted.
+    const hostname = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    if (this.allowHosts.has(hostname.toLowerCase())) return undefined;
+    if (isIP(hostname) !== 0) return this.blockedHostReason(hostname);
+
+    let addresses: readonly LookupAddress[];
+    try {
+      addresses = await this.resolve(hostname);
+    } catch {
+      return undefined;
+    }
+    return firstBlocked(hostname, addresses)?.message;
+  }
+
   /** The addresses of the host, all of them checked. Throws if any is blocked. */
   private async resolveChecked(
     hostname: string,
@@ -217,14 +241,26 @@ export class SsrfGuard {
       });
     }
     if (this.allowHosts.has(hostname.toLowerCase())) return addresses;
-    // One blocked address refuses the host: using only the others would let a
-    // name with mixed records reach the private one on a retry of the connect.
-    for (const { address } of addresses) {
-      const reason = isBlockedAddress(address);
-      if (reason !== undefined) {
-        throw new SsrfBlockedError(hostname, address, reason);
-      }
-    }
+    const blocked = firstBlocked(hostname, addresses);
+    if (blocked !== undefined) throw blocked;
     return addresses;
   }
+}
+
+/**
+ * The refusal for the first blocked address among a host's answers. One blocked
+ * address refuses the host: using only the others would let a name with mixed
+ * records reach the private one on a retry of the connect.
+ */
+function firstBlocked(
+  hostname: string,
+  addresses: readonly LookupAddress[],
+): SsrfBlockedError | undefined {
+  for (const { address } of addresses) {
+    const reason = isBlockedAddress(address);
+    if (reason !== undefined) {
+      return new SsrfBlockedError(hostname, address, reason);
+    }
+  }
+  return undefined;
 }
