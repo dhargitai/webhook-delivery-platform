@@ -51,6 +51,12 @@ export interface TopologyNames {
    * by a fixed routing key.
    */
   parkQueue(delayMs: number, lane: number): string;
+  /**
+   * Where a retry parked without using up an attempt waits `delayMs` before it
+   * returns to `retryReadyQueue`, never to a fresh lane: a retry stays retry
+   * traffic, within the retry consumer's share of a worker.
+   */
+  retryParkQueue(delayMs: number): string;
 }
 
 /**
@@ -70,5 +76,6 @@ export function topologyNames(namespace = 'wdp'): TopologyNames {
     retryTierQueue: (delayMs) => `${namespace}.retry.${delayMs}`,
     parkQueue: (delayMs, lane) =>
       `${namespace}.delay.${delayMs}.${laneRoutingKey(lane)}`,
+    retryParkQueue: (delayMs) => `${namespace}.delay.${delayMs}.retry`,
   };
 }

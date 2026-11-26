@@ -157,21 +157,47 @@ describe('BrokerRetryPublisher', () => {
   });
 
   describe('park', () => {
-    it('puts the job in the delay queue of its own lane, through the default exchange', async () => {
-      await publisher.park(job, 5_000);
+    // A first attempt: it goes back to a fresh lane.
+    const fresh: DeliveryJob = { ...job, attemptNo: 1 };
+
+    it('puts a first attempt in the delay queue of its own lane, through the default exchange', async () => {
+      await publisher.park(fresh, 5_000);
 
       expect(channel.sent).toHaveLength(1);
       expect(channel.sent[0]).toMatchObject({
         exchange: '',
-        routingKey: names.parkQueue(5_000, lanes.lane(job.endpointId)),
+        routingKey: names.parkQueue(5_000, lanes.lane(fresh.endpointId)),
       });
+    });
+
+    it('treats a job with no attempt number as a first attempt', async () => {
+      const { attemptNo: _attemptNo, ...first } = job;
+
+      await publisher.park(first, 5_000);
+
+      expect(channel.sent[0]?.routingKey).toBe(
+        names.parkQueue(5_000, lanes.lane(job.endpointId)),
+      );
+    });
+
+    it('puts a retry in the retry delay queue, so it comes back through retry.ready and not on a fresh lane', async () => {
+      await publisher.park({ ...job, attemptNo: 2 }, 5_000);
+      await publisher.park({ ...job, attemptNo: 8 }, 5_000);
+
+      expect(channel.sent).toHaveLength(2);
+      for (const sent of channel.sent) {
+        expect(sent).toMatchObject({
+          exchange: '',
+          routingKey: names.retryParkQueue(5_000),
+        });
+      }
     });
 
     it('picks the lane by the endpoint, so the job returns to the lane it came from', async () => {
       const endpointIds = Array.from({ length: 50 }, () => randomUUID());
 
       for (const endpointId of endpointIds) {
-        await publisher.park({ ...job, endpointId }, 5_000);
+        await publisher.park({ ...fresh, endpointId }, 5_000);
       }
 
       const queues = channel.sent.map((sent) => sent.routingKey);
@@ -183,11 +209,13 @@ describe('BrokerRetryPublisher', () => {
     });
 
     it('picks the queue by the delay it is given', async () => {
+      await publisher.park(fresh, 500);
       await publisher.park(job, 500);
 
-      expect(channel.sent[0]?.routingKey).toBe(
+      expect(channel.sent.map((sent) => sent.routingKey)).toEqual([
         names.parkQueue(500, lanes.lane(job.endpointId)),
-      );
+        names.retryParkQueue(500),
+      ]);
     });
 
     it('sends the job as it was, attempt number included, under its delivery id', async () => {

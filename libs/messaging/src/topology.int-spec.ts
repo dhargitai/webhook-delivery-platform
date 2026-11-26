@@ -363,6 +363,41 @@ describe('declareTopology (real RabbitMQ)', () => {
       expect(await peek(names.retryReadyQueue)).toBeNull();
     });
 
+    it('returns a parked retry to retry.ready after the delay, and to no lane', async () => {
+      const namespace = testingNamespace();
+      const channel = await conn.createChannel();
+      const parkDelayMs = 300;
+      const names = await declareRetryTopology(channel, {
+        namespace,
+        laneCount: 2,
+        retryDelaysMs: [100],
+        parkDelayMs,
+      });
+
+      const sentAt = Date.now();
+      await publishToQueue(names.retryParkQueue(parkDelayMs), 'parked retry', {
+        messageId: 'delivery-3',
+      });
+
+      expect(await peek(names.retryReadyQueue)).toBeNull();
+      let message: GetMessage | null = null;
+      await eventually(async () => {
+        message = await peek(names.retryReadyQueue);
+        expect(message).not.toBeNull();
+      });
+      const waited = Date.now() - sentAt;
+
+      expect(waited).toBeGreaterThanOrEqual(parkDelayMs - 50);
+      expect(message).toMatchObject({
+        properties: { messageId: 'delivery-3' },
+      });
+      expect((message as GetMessage | null)?.content.toString()).toBe(
+        'parked retry',
+      );
+      expect(await peek(names.laneQueue(0))).toBeNull();
+      expect(await peek(names.laneQueue(1))).toBeNull();
+    });
+
     it('declares a delay shared by several buckets once, and can be declared twice', async () => {
       const namespace = testingNamespace();
       const channel = await conn.createChannel();
@@ -406,6 +441,8 @@ describe('declareTopology (real RabbitMQ)', () => {
       expect(await queueExists(first.parkQueue(150, 0))).toBe(true);
       expect(await queueExists(first.parkQueue(350, 0))).toBe(true);
       expect(await queueExists(first.parkQueue(350, 1))).toBe(true);
+      expect(await queueExists(first.retryParkQueue(150))).toBe(true);
+      expect(await queueExists(first.retryParkQueue(350))).toBe(true);
     });
 
     it('makes retry.ready a quorum queue with the delivery limit and dead-letter exchange', async () => {

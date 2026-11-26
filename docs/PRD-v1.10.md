@@ -1,7 +1,7 @@
 **Status:** Approved
-**Date:** 2026-11-25
+**Date:** 2026-11-26
 **Author:** David Hargitai
-**Version:** 1.9
+**Version:** 1.10
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -134,6 +134,7 @@ flowchart LR
     Worker --> Attempts[(MongoDB attempts, TTL 30d)]
     Worker -. "fail" .-> Tiers[/retry tier queues/] -. "TTL expiry" .-> QRetry[/retry.ready/] --> Worker
     Worker -. "delay (cap hit)" .-> QDelay[/short delay queue/] -.-> QFresh
+    QDelay -. "retry" .-> QRetry
     Worker -. "exhausted" .-> DLQ[/DLQ/]
     Worker -. "summary" .-> GW[Dashboard gateway] -.-> UI>React dashboard]
 ```
@@ -179,7 +180,7 @@ One monorepo with deployable apps (API, relay, dispatcher, worker, dashboard gat
 - **Retry tiers:** one queue per delay (about 5 s, 30 s, 5 min, 30 min, 2 h, 5 h, 10 h), each with a fixed `x-message-ttl` and a dead-letter exchange routing to `retry.ready`. Per-message TTL isn't used, because RabbitMQ expires only at the head of the queue. A **time-scale factor** compresses the schedule for demos.
 - **Worker order of operations:** attempt, log attempt, publish retry (or DLQ) and wait for the confirm, **then** ack. A crash in between can duplicate but never lose.
 - **Dispatch failures:** the dispatcher reads subscribers from Postgres on every event (the Redis subscription cache is not built; it is a scale-up path). A transient failure (publish error, confirm timeout, lookup error) parks the whole event in a retry queue and re-handles it after a pause, up to `DISPATCHER_MAX_ATTEMPTS`; deterministic `delivery_id`s make the re-handling idempotent. A malformed event, or one whose attempts run out, goes to the DLQ with its reason.
-- **Per-endpoint cap exceeded:** park the job in the delay tier without consuming an attempt. Never nack-requeue (it spins).
+- **Per-endpoint cap exceeded:** park the job in the delay tier without consuming an attempt. Never nack-requeue (it spins). A parked retry returns to `retry.ready`, never to a fresh lane.
 - **Circuit open:** re-park without calling the endpoint and without consuming an attempt. Half-open: exactly one probe.
 - **Quorum queues** with `delivery-limit` for poison messages. Graceful shutdown: cancel consumers, finish in-flight work, close the channel, with a grace period larger than the HTTP timeout. The dev and test brokers are pinned to RabbitMQ 4.4, because the dispatcher's retry relies on its `delivery-limit` behaviour for returned messages (`nack` with requeue never counts toward the limit, `reject` with requeue does).
 
@@ -364,7 +365,7 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 **Deliverables**
 
 - ✅ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier (the worker consults the breaker and the limiter before every call)
-- ⬜ Sharded fresh lanes, separation of fresh and retry consumption priority
+- ✅ Sharded fresh lanes, separation of fresh and retry consumption priority
 - ✅ SSRF guard test suite
 - ⬜ Secret encryption and rotation
 - ⬜ Load test with a noisy tenant and a hanging endpoint; recorded results
