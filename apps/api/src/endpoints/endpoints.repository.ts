@@ -1,3 +1,5 @@
+import type { SealedSecret } from '@wdp/core';
+
 export type EndpointStatus = 'active' | 'disabled';
 
 export interface Endpoint {
@@ -20,13 +22,15 @@ export interface NewEndpoint {
  */
 export abstract class EndpointsRepository {
   /**
-   * `signingSecret` is stored with the endpoint and never read back through
-   * this contract: the returned `Endpoint` has no secret.
+   * Stores the endpoint under `id`, chosen by the caller because the sealed
+   * secret is bound to it. The secret is stored sealed only, and never read
+   * back through this contract: the returned `Endpoint` has no secret.
    */
   abstract create(
     tenantId: string,
+    id: string,
     input: NewEndpoint,
-    signingSecret: string,
+    signingSecret: SealedSecret,
   ): Promise<Endpoint>;
 
   /** In creation order. */

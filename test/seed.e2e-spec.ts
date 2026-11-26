@@ -1,7 +1,11 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { createDatabase, type Database } from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+import {
+  createTestDatabase,
+  type TestDatabase,
+  testKek,
+} from '@wdp/core/testing';
 import type { Kysely } from 'kysely';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
@@ -19,6 +23,7 @@ describe('seeded API key (e2e)', () => {
     // evaluated, so the variables must exist before that import.
     process.env.DATABASE_URL = testDb.url;
     process.env.REDIS_URL = inject('redisUrl');
+    process.env.SECRETS_KEK_V1 = testKek();
     const { AppModule } = await import('../apps/api/src/app.module.js');
     const { configureApp } = await import('../apps/api/src/configure-app.js');
     const moduleRef = await Test.createTestingModule({

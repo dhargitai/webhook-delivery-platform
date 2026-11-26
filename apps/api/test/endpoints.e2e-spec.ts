@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { secretAad } from '@wdp/core';
+import { sql } from 'kysely';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startTestApp, type TestApp } from './support/test-app.js';
@@ -100,12 +102,61 @@ describe('endpoints and subscriptions (e2e)', () => {
 
       expect(created.status).toBe(201);
       expect(created.body.secret).toMatch(SECRET_PATTERN);
+    });
+
+    it('stores no plaintext secret, only one sealed to the endpoint', async () => {
+      const { tenantId, key } = await t.seedTenant();
+      const created = await call('post', '/endpoints', key, {
+        url: 'https://hooks.acme.test/in',
+      });
+      const secret = created.body.secret as string;
+
+      // The whole row as Postgres renders it: bytea comes out as hex, so the
+      // secret's own bytes are searched in hex as well.
+      const { rows } = await sql<{ row: string }>`
+        SELECT row_to_json(e)::text AS row FROM endpoints e WHERE id = ${created.body.id}
+      `.execute(t.db);
+      const row = rows[0]?.row ?? '';
+      const body = secret.slice('whsec_'.length);
+      expect(row).not.toContain(secret);
+      expect(row).not.toContain(body);
+      expect(row).not.toContain(Buffer.from(body, 'base64').toString('hex'));
+      expect(row).not.toContain(Buffer.from(secret).toString('hex'));
+
       const stored = await t.db
         .selectFrom('endpoints')
-        .select('signing_secret')
+        .selectAll()
         .where('id', '=', created.body.id)
         .executeTakeFirstOrThrow();
-      expect(stored.signing_secret).toBe(created.body.secret);
+      expect(stored.signing_secret).toBeNull();
+      const {
+        secret_kek_id,
+        secret_wrapped_dek,
+        secret_iv,
+        secret_ciphertext,
+        secret_tag,
+      } = stored;
+      if (
+        secret_kek_id === null ||
+        secret_wrapped_dek === null ||
+        secret_iv === null ||
+        secret_ciphertext === null ||
+        secret_tag === null
+      ) {
+        throw new Error('no sealed secret stored');
+      }
+      await expect(
+        t.cipher.open(
+          {
+            kekId: secret_kek_id,
+            wrappedDek: secret_wrapped_dek,
+            iv: secret_iv,
+            ciphertext: secret_ciphertext,
+            tag: secret_tag,
+          },
+          secretAad(tenantId, created.body.id),
+        ),
+      ).resolves.toBe(secret);
     });
 
     it('never returns the secret on a later read', async () => {

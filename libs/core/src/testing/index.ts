@@ -5,3 +5,9 @@ export {
   FakeEventStore,
   SequentialEventIdGenerator,
 } from './fake-event-store.js';
+export {
+  sealedEndpointRow,
+  sealedSecretColumns,
+  testCipher,
+  testKek,
+} from './sealed-secret.js';

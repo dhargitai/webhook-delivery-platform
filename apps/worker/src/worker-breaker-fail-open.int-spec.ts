@@ -3,13 +3,14 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Logger } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { createDatabase, type Database, type DeliveryJob } from '@wdp/core';
 import {
-  createDatabase,
-  type Database,
-  type DeliveryJob,
-  generateEndpointSecret,
-} from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+  createTestDatabase,
+  type TestDatabase,
+  sealedEndpointRow,
+  testCipher,
+  testKek,
+} from '@wdp/core/testing';
 import { laneRoutingKey } from '@wdp/domain';
 import {
   BrokerConnection,
@@ -22,6 +23,10 @@ import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import type { Kysely } from 'kysely';
 import { MongoClient } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+
+// The worker opens endpoint secrets with this key; the spec seals them with it.
+const KEK = testKek();
+const cipher = testCipher(KEK);
 
 const LANES = 4;
 
@@ -77,6 +82,7 @@ describe('a worker whose Redis is unreachable (real Postgres, RabbitMQ and Mongo
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
+    process.env.SECRETS_KEK_V1 = KEK;
     process.env.TIME_SCALE = '1000';
     process.env.RETRY_MIN_DELAY_MS = '20';
     const { WorkerModule } = await import('./worker.module.js');
@@ -106,9 +112,9 @@ describe('a worker whose Redis is unreachable (real Postgres, RabbitMQ and Mongo
     const endpoint = await db
       .insertInto('endpoints')
       .values({
+        ...(await sealedEndpointRow(cipher, tenant.id)),
         tenant_id: tenant.id,
         url: receiverUrl,
-        signing_secret: generateEndpointSecret(),
         status: 'active',
       })
       .returning('id')

@@ -10,7 +10,11 @@ import {
   generateApiKey,
   SignatureService,
 } from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+import {
+  createTestDatabase,
+  type TestDatabase,
+  testKek,
+} from '@wdp/core/testing';
 import { deliveryId } from '@wdp/domain';
 import { eventually, testingNamespace } from '@wdp/messaging/testing';
 import type { Kysely } from 'kysely';
@@ -88,6 +92,7 @@ describe('first delivery (e2e)', () => {
     // is evaluated, so every variable must exist before the imports below.
     process.env.DATABASE_URL = testDb.url;
     process.env.REDIS_URL = inject('redisUrl');
+    process.env.SECRETS_KEK_V1 = testKek();
     process.env.RABBITMQ_URL = inject('rabbitUrl');
     process.env.MONGO_URL = inject('mongoUrl');
     process.env.MONGO_DB = mongoDbName;

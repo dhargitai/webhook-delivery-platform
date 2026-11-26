@@ -16,6 +16,10 @@ x-app: &app
     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     BROKER_NAMESPACE: wdp
     LANE_COUNT: '4'
+    # Development only, like the guest/guest broker login: the key that seals
+    # every endpoint signing secret. The API seals with it, the worker opens
+    # with it. A real deployment injects its own and never commits it.
+    SECRETS_KEK_V1: 6inPYvmHTW2Ggzhksv+Gv6E0oIPMY3jm8VrFXXDfb0I=
 
 # The long-running services. Docker restarts them after a crash or a failed
 # boot (a non-zero exit), for example a worker that started while Mongo was

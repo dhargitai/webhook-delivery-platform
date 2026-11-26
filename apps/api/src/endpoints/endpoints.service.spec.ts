@@ -1,4 +1,12 @@
-import { type HostResolver, SsrfGuard } from '@wdp/core';
+import { randomBytes } from 'node:crypto';
+import {
+  EnvKeyProvider,
+  type HostResolver,
+  type SealedSecret,
+  SecretCipher,
+  secretAad,
+  SsrfGuard,
+} from '@wdp/core';
 import { EndpointNotFoundError, UrlNotAllowedError } from '@wdp/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -13,17 +21,18 @@ class FakeEndpointsRepository extends EndpointsRepository {
   readonly endpoints = new Map<string, Endpoint>();
   readonly subscriptions = new Map<string, string[]>();
   /** What the service handed over, by endpoint id. Never part of an `Endpoint`. */
-  readonly secrets = new Map<string, string>();
+  readonly secrets = new Map<string, SealedSecret>();
   private counter = 0;
 
   async create(
     tenantId: string,
+    id: string,
     input: NewEndpoint,
-    signingSecret: string,
+    signingSecret: SealedSecret,
   ): Promise<Endpoint> {
     this.counter += 1;
     const endpoint: Endpoint = {
-      id: `ep-${this.counter}`,
+      id,
       tenantId,
       url: input.url,
       description: input.description,
@@ -74,15 +83,22 @@ class FakeEndpointsRepository extends EndpointsRepository {
 const unresolvable: HostResolver = () =>
   Promise.reject(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }));
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('EndpointsService', () => {
   let repo: FakeEndpointsRepository;
   let service: EndpointsService;
+  const cipher = new SecretCipher(
+    new EnvKeyProvider({ kekId: 'v1', key: randomBytes(32) }),
+  );
 
   beforeEach(() => {
     repo = new FakeEndpointsRepository();
     service = new EndpointsService(
       repo,
       new SsrfGuard({ resolve: unresolvable }),
+      cipher,
     );
   });
 
@@ -108,6 +124,7 @@ describe('EndpointsService', () => {
         new SsrfGuard({
           resolve: () => Promise.resolve([{ address: '10.0.0.5', family: 4 }]),
         }),
+        cipher,
       );
 
       const refused = guarded.create('tenant-a', input);
@@ -138,11 +155,38 @@ describe('EndpointsService', () => {
   });
 
   describe('signing secret', () => {
-    it('hands out the secret it stored for the endpoint', async () => {
+    it('hands out the secret it stored, sealed, for the endpoint', async () => {
       const { endpoint, secret } = await service.create('tenant-a', input);
+      const stored = repo.secrets.get(endpoint.id);
 
       expect(secret).toMatch(/^whsec_[A-Za-z0-9+/]{43}=$/);
-      expect(repo.secrets.get(endpoint.id)).toBe(secret);
+      expect(stored?.ciphertext.includes(Buffer.from(secret))).toBe(false);
+      await expect(
+        stored && cipher.open(stored, secretAad('tenant-a', endpoint.id)),
+      ).resolves.toBe(secret);
+    });
+
+    it('binds the stored secret to its own tenant and endpoint', async () => {
+      const first = await service.create('tenant-a', input);
+      const second = await service.create('tenant-a', input);
+      const stored = repo.secrets.get(first.endpoint.id);
+      if (stored === undefined) throw new Error('nothing stored');
+
+      await expect(
+        cipher.open(stored, secretAad('tenant-a', second.endpoint.id)),
+      ).rejects.toThrow();
+      await expect(
+        cipher.open(stored, secretAad('tenant-b', first.endpoint.id)),
+      ).rejects.toThrow();
+    });
+
+    it('creates every endpoint under a fresh UUID of its own', async () => {
+      const first = await service.create('tenant-a', input);
+      const second = await service.create('tenant-a', input);
+
+      expect(first.endpoint.id).toMatch(UUID);
+      expect(second.endpoint.id).toMatch(UUID);
+      expect(first.endpoint.id).not.toBe(second.endpoint.id);
     });
 
     it('gives every endpoint its own secret', async () => {

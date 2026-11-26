@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { createDatabase, type Database, type DeliveryJob } from '@wdp/core';
 import {
-  createDatabase,
-  type Database,
-  type DeliveryJob,
-  generateEndpointSecret,
-} from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+  createTestDatabase,
+  type TestDatabase,
+  sealedEndpointRow,
+  testCipher,
+  testKek,
+} from '@wdp/core/testing';
 import { laneRoutingKey } from '@wdp/domain';
 import {
   BrokerConnection,
@@ -33,6 +34,10 @@ import {
   inject,
   it,
 } from 'vitest';
+
+// The worker opens endpoint secrets with this key; the spec seals them with it.
+const KEK = testKek();
+const cipher = testCipher(KEK);
 
 const LANES = 4;
 
@@ -115,6 +120,7 @@ describe('a worker that is stopped mid-delivery (real Postgres, RabbitMQ and Mon
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
+    process.env.SECRETS_KEK_V1 = KEK;
     process.env.TIME_SCALE = String(TIME_SCALE);
     process.env.RETRY_MIN_DELAY_MS = String(RETRY_MIN_DELAY_MS);
     ({ WorkerModule } = await import('./worker.module.js'));
@@ -186,9 +192,9 @@ describe('a worker that is stopped mid-delivery (real Postgres, RabbitMQ and Mon
     const endpoint = await db
       .insertInto('endpoints')
       .values({
+        ...(await sealedEndpointRow(cipher, tenant.id)),
         tenant_id: tenant.id,
         url: receiverUrl,
-        signing_secret: generateEndpointSecret(),
       })
       .returning('id')
       .executeTakeFirstOrThrow();

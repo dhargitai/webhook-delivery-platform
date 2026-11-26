@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+import {
+  createTestDatabase,
+  type TestDatabase,
+  testKek,
+} from '@wdp/core/testing';
 import { testingNamespace } from '@wdp/messaging/testing';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
@@ -21,6 +25,7 @@ describe('worker status (e2e)', () => {
     process.env.BROKER_NAMESPACE = testingNamespace();
     process.env.MONGO_URL = inject('mongoUrl');
     process.env.REDIS_URL = inject('redisUrl');
+    process.env.SECRETS_KEK_V1 = testKek();
     process.env.MONGO_DB = `wdp_test_${randomUUID().replaceAll('-', '')}`;
     const { WorkerModule } = await import('../src/worker.module.js');
     const moduleRef = await Test.createTestingModule({

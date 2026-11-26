@@ -24,6 +24,7 @@ export {
 } from './api-key.js';
 export { generateEndpointSecret } from './endpoint-secret.js';
 export { KeyProvider, type WrappedKey } from './secrets/key-provider.js';
+export { parseKek } from './secrets/kek.js';
 export {
   EnvKeyProvider,
   type EnvKeyProviderOptions,

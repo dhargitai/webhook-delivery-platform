@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { envSchema } from './env.schema.js';
 
+// 32 bytes, 0x00..0x1f.
+const KEK = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
+
 const required = {
   DATABASE_URL: 'postgres://u:p@localhost/db',
   REDIS_URL: 'redis://localhost',
+  SECRETS_KEK_V1: KEK.toString('base64'),
 };
 
 describe('api env schema', () => {
   it('applies the PRD defaults', () => {
     expect(envSchema.parse(required)).toEqual({
       ...required,
+      SECRETS_KEK_V1: KEK,
       PORT: 3000,
       INGEST_RATE_PER_SECOND: 100,
       INGEST_BURST: 200,
@@ -17,17 +22,25 @@ describe('api env schema', () => {
     });
   });
 
-  it.each(['DATABASE_URL', 'REDIS_URL'] as const)('requires %s', (name) => {
-    const { [name]: _removed, ...rest } = required;
+  it.each(['DATABASE_URL', 'REDIS_URL', 'SECRETS_KEK_V1'] as const)(
+    'requires %s',
+    (name) => {
+      const { [name]: _removed, ...rest } = required;
 
-    expect(envSchema.safeParse(rest).success).toBe(false);
-  });
+      expect(envSchema.safeParse(rest).success).toBe(false);
+    },
+  );
 
   it.each([
     { name: 'a port of 0', env: { PORT: '0' } },
     { name: 'a port above 65535', env: { PORT: '70000' } },
     { name: 'a non-positive rate', env: { INGEST_RATE_PER_SECOND: '0' } },
     { name: 'a fractional burst', env: { INGEST_BURST: '1.5' } },
+    {
+      name: 'a KEK that is not 32 bytes',
+      env: { SECRETS_KEK_V1: Buffer.alloc(16).toString('base64') },
+    },
+    { name: 'a KEK that is not base64', env: { SECRETS_KEK_V1: 'not-a-key' } },
   ])('rejects $name', ({ env }) => {
     expect(envSchema.safeParse({ ...required, ...env }).success).toBe(false);
   });

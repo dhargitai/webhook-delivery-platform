@@ -6,3 +6,5 @@ export const ATTEMPT_LOG = Symbol('ATTEMPT_LOG');
 export const CIRCUIT_BREAKER = Symbol('CIRCUIT_BREAKER');
 // A token for the same reason: tests can swap in a limiter with a smaller cap.
 export const ENDPOINT_LIMITER = Symbol('ENDPOINT_LIMITER');
+// Opens endpoint secrets: a `SecretOpener`, an interface, so a token.
+export const SECRET_OPENER = Symbol('SECRET_OPENER');

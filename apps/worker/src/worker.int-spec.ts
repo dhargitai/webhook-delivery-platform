@@ -11,7 +11,13 @@ import {
   RetryPolicy,
   SignatureService,
 } from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+import {
+  createTestDatabase,
+  type TestDatabase,
+  sealedEndpointRow,
+  testCipher,
+  testKek,
+} from '@wdp/core/testing';
 import { laneRoutingKey } from '@wdp/domain';
 import {
   BrokerConnection,
@@ -40,6 +46,10 @@ import {
   inject,
   it,
 } from 'vitest';
+
+// The worker opens endpoint secrets with this key; the spec seals them with it.
+const KEK = testKek();
+const cipher = testCipher(KEK);
 
 const LANES = 4;
 
@@ -138,6 +148,7 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
+    process.env.SECRETS_KEK_V1 = KEK;
     process.env.TIME_SCALE = String(TIME_SCALE);
     process.env.RETRY_MIN_DELAY_MS = String(RETRY_MIN_DELAY_MS);
     const { WorkerModule } = await import('./worker.module.js');
@@ -229,7 +240,12 @@ describe('worker (real Postgres, RabbitMQ and MongoDB)', () => {
     const secret = generateEndpointSecret();
     const row = await db
       .insertInto('endpoints')
-      .values({ tenant_id: tenantId, url, signing_secret: secret, status })
+      .values({
+        ...(await sealedEndpointRow(cipher, tenantId, secret)),
+        tenant_id: tenantId,
+        url,
+        status,
+      })
       .returning('id')
       .executeTakeFirstOrThrow();
     return { id: row.id, secret };

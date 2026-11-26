@@ -1,5 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { generateEndpointSecret, SsrfGuard } from '@wdp/core';
+import {
+  generateEndpointSecret,
+  SecretCipher,
+  secretAad,
+  SsrfGuard,
+} from '@wdp/core';
 import { EndpointNotFoundError, UrlNotAllowedError } from '@wdp/domain';
 import {
   type Endpoint,
@@ -18,6 +24,7 @@ export class EndpointsService {
   constructor(
     private readonly endpoints: EndpointsRepository,
     private readonly guard: SsrfGuard,
+    private readonly cipher: SecretCipher,
   ) {}
 
   /**
@@ -30,8 +37,12 @@ export class EndpointsService {
     if (refusal !== undefined) {
       throw new UrlNotAllowedError(refusal);
     }
+    // The id is chosen here, before the insert, because the sealed secret is
+    // bound to it: a ciphertext moved onto another row no longer opens.
+    const id = randomUUID();
     const secret = generateEndpointSecret();
-    const endpoint = await this.endpoints.create(tenantId, input, secret);
+    const sealed = await this.cipher.seal(secret, secretAad(tenantId, id));
+    const endpoint = await this.endpoints.create(tenantId, id, input, sealed);
     return { endpoint, secret };
   }
 

@@ -8,13 +8,25 @@ import {
   REDIS,
   RedisModule,
 } from '@wdp/common';
-import { CircuitBreaker, EndpointLimiter, MongoAttemptLog } from '@wdp/core';
+import {
+  CachedSecretOpener,
+  CircuitBreaker,
+  EndpointLimiter,
+  EnvKeyProvider,
+  MongoAttemptLog,
+  SecretCipher,
+} from '@wdp/core';
 import type { Redis } from 'ioredis';
 import type { MongoClient } from 'mongodb';
 import { envSchema } from './config/env.schema.js';
 import { workerConfig } from './config/worker.config.js';
 import { StatusController } from './status.controller.js';
-import { ATTEMPT_LOG, CIRCUIT_BREAKER, ENDPOINT_LIMITER } from './tokens.js';
+import {
+  ATTEMPT_LOG,
+  CIRCUIT_BREAKER,
+  ENDPOINT_LIMITER,
+  SECRET_OPENER,
+} from './tokens.js';
 import { WorkerRunner } from './worker-runner.js';
 
 @Module({
@@ -79,6 +91,18 @@ import { WorkerRunner } from './worker-runner.js';
       inject: [REDIS],
       // The PRD's cap, lease and rate; an endpoint may override its rate.
       useFactory: (redis: Redis) => new EndpointLimiter(redis),
+    },
+    {
+      provide: SECRET_OPENER,
+      inject: [workerConfig.KEY],
+      // Decrypted secrets stay in this worker's memory for the PRD's 60 s, so
+      // a busy endpoint does not unwrap its data key on every delivery.
+      useFactory: (config: ConfigType<typeof workerConfig>) =>
+        new CachedSecretOpener(
+          new SecretCipher(
+            new EnvKeyProvider({ kekId: 'v1', key: config.secretsKek }),
+          ),
+        ),
     },
     WorkerRunner,
   ],
