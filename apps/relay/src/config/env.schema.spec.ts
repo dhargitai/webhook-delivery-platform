@@ -15,6 +15,10 @@ describe('relay env schema', () => {
       RELAY_POLL_INTERVAL_MS: 100,
       RELAY_CONFIRM_TIMEOUT_MS: 5000,
       RELAY_ERROR_BACKOFF_MS: 1000,
+      EVENTS_RETENTION_DAYS: 30,
+      PURGE_BATCH_SIZE: 1000,
+      PURGE_INTERVAL_MS: 86_400_000,
+      PURGE_ERROR_BACKOFF_MS: 60_000,
     });
   });
 
@@ -41,6 +45,17 @@ describe('relay env schema', () => {
     { name: 'a negative poll interval', env: { RELAY_POLL_INTERVAL_MS: '-1' } },
     { name: 'a confirm timeout of 0', env: { RELAY_CONFIRM_TIMEOUT_MS: '0' } },
     { name: 'a non-numeric batch size', env: { RELAY_BATCH_SIZE: 'lots' } },
+    { name: 'a retention of 0 days', env: { EVENTS_RETENTION_DAYS: '0' } },
+    {
+      name: 'a fractional retention',
+      env: { EVENTS_RETENTION_DAYS: '1.5' },
+    },
+    { name: 'a purge batch size of 0', env: { PURGE_BATCH_SIZE: '0' } },
+    { name: 'a purge interval of 0', env: { PURGE_INTERVAL_MS: '0' } },
+    {
+      name: 'a negative purge error backoff',
+      env: { PURGE_ERROR_BACKOFF_MS: '-1' },
+    },
   ])('rejects $name', ({ env }) => {
     expect(envSchema.safeParse({ ...required, ...env }).success).toBe(false);
   });

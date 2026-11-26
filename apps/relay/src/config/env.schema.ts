@@ -15,6 +15,13 @@ export const envSchema = z.object({
   RELAY_CONFIRM_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   // Pause after a failed run, so a broker outage is not hammered.
   RELAY_ERROR_BACKOFF_MS: z.coerce.number().int().min(0).default(1000),
+  // PRD locked: published events are kept 30 days from their creation, then
+  // purged in batches once a day.
+  EVENTS_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  PURGE_BATCH_SIZE: z.coerce.number().int().positive().default(1000),
+  PURGE_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
+  // Pause after a failed purge before trying again.
+  PURGE_ERROR_BACKOFF_MS: z.coerce.number().int().min(0).default(60_000),
 });
 
 export type Env = z.output<typeof envSchema>;

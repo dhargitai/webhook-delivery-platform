@@ -94,6 +94,16 @@ describe('database schema (real Postgres)', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.indexdef).toContain('WHERE (published_at IS NULL)');
     });
+
+    it('has a partial index on the creation time of published events', async () => {
+      const { rows } = await pool.query<{ indexdef: string }>(
+        `SELECT indexdef FROM pg_indexes WHERE tablename = 'events' AND indexname = 'events_published_created_idx'`,
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.indexdef).toContain('(created_at)');
+      expect(rows[0]?.indexdef).toContain('WHERE (published_at IS NOT NULL)');
+    });
   });
 
   describe('endpoints', () => {
