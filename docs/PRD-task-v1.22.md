@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-26
 **Author:** David Hargitai
-**Version:** 1.21
+**Version:** 1.22
 **Source PRD:** PRD-v1.10
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -176,19 +176,19 @@ A minimal worker service accessible in the development environment that returns 
 
 - [x] `GET /status` returns `200 OK` in the development environment
 
-### Task 8: Events retention purge ⬜
+### Task 8: Events retention purge ✅
 
 **Original Story:** Locked parameter
 **Scope:** `core`, Postgres
 **Blocked by:** Task 2
 
 **What to build:**
-A daily batched purge of published `events` rows older than 30 days.
+A daily batched purge of published `events` rows older than 30 days. Built as `EventPurger` and `KyselyEventPurger` in `@wdp/core`: `purgeBatch()` deletes up to one batch of published rows created before the cutoff, oldest first, in one statement, and returns the count. The cutoff is taken from the database clock (`now()`), the one that stamps `created_at`. The batch is selected `FOR UPDATE SKIP LOCKED`, so two relays purging at once neither block each other nor delete the same rows. Migration 0006 adds a partial index on `created_at` of published rows, so the purge reads only the oldest rows. The relay runs it as a second `RelayLoop` next to the outbox loop: at boot, then every `PURGE_INTERVAL_MS` (24 h), a full batch running again at once until nothing is due, and it stops with the relay. New settings: `EVENTS_RETENTION_DAYS` (30), `PURGE_BATCH_SIZE` (1000), `PURGE_INTERVAL_MS` and `PURGE_ERROR_BACKOFF_MS` (60 s). Age is counted from `created_at`, so: an `Idempotency-Key` is forgotten with its row after 30 days; a retry runs up to about 17.6 h after creation, so in its last hours an attempt document can outlive its event's payload, and a replay then (Task 32) finds none; an event that stayed unpublished for over 30 days is purged soon after it is finally published.
 
 **Acceptance Criteria:**
 
-- [ ] Published rows older than 30 days are removed in batches
-- [ ] Unpublished rows are never removed, whatever their age
+- [x] Published rows older than 30 days are removed in batches
+- [x] Unpublished rows are never removed, whatever their age
 
 ### Task 9: Endpoint signing secret ✅
 
