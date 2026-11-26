@@ -360,3 +360,98 @@ describe('SsrfGuard.blockedHostReason', () => {
     expect(allowing.blockedHostReason('FD00::abcd')).toBeUndefined();
   });
 });
+
+describe('SsrfGuard.refusalReason', () => {
+  const failing: HostResolver = () =>
+    Promise.reject(
+      Object.assign(new Error('getaddrinfo ENOTFOUND gone.test'), {
+        code: 'ENOTFOUND',
+      }),
+    );
+
+  it('refuses a literal IPv4 host and names its category', async () => {
+    const guard = new SsrfGuard({ resolve: failing });
+
+    await expect(
+      guard.refusalReason('https://169.254.169.254/'),
+    ).resolves.toMatch(/169\.254\.169\.254 is link-local/);
+  });
+
+  it('refuses a bracketed literal IPv6 host instead of treating it as a name', async () => {
+    const guard = new SsrfGuard({ resolve: failing });
+
+    await expect(guard.refusalReason('https://[::1]/hook')).resolves.toMatch(
+      /loopback/,
+    );
+  });
+
+  it('refuses a name that resolves to a blocked address, naming the address', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([PRIVATE]) });
+
+    await expect(
+      guard.refusalReason('https://internal.test/hook'),
+    ).resolves.toBe(
+      'internal.test resolves to 10.0.0.5, which is private network (RFC 1918)',
+    );
+  });
+
+  it('refuses a name when only one of its answers is blocked', async () => {
+    const guard = new SsrfGuard({
+      resolve: scripted([PUBLIC, { address: '192.168.1.1', family: 4 }]),
+    });
+
+    await expect(guard.refusalReason('https://mixed.test/')).resolves.toMatch(
+      /192\.168\.1\.1/,
+    );
+  });
+
+  it('accepts a name whose every answer is public', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([PUBLIC]) });
+
+    await expect(
+      guard.refusalReason('https://hooks.acme.test/in'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('accepts a name that does not resolve: the connect-time guard decides then', async () => {
+    const guard = new SsrfGuard({ resolve: failing });
+
+    await expect(
+      guard.refusalReason('https://gone.test/in'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('accepts a name that resolves to nothing', async () => {
+    const guard = new SsrfGuard({ resolve: scripted([]) });
+
+    await expect(
+      guard.refusalReason('https://empty.test/in'),
+    ).resolves.toBeUndefined();
+  });
+
+  describe('allowHosts', () => {
+    it('lets an allowlisted name through, though it resolves to a blocked address', async () => {
+      const url = 'http://mock-receiver:4000/hook';
+      const allowing = new SsrfGuard({
+        resolve: scripted([PRIVATE]),
+        allowHosts: ['mock-receiver'],
+      });
+      const strict = new SsrfGuard({ resolve: scripted([PRIVATE]) });
+
+      await expect(allowing.refusalReason(url)).resolves.toBeUndefined();
+      await expect(strict.refusalReason(url)).resolves.toMatch(/10\.0\.0\.5/);
+    });
+
+    it('lets an allowlisted literal host through', async () => {
+      const url = 'http://127.0.0.1:4000/hook';
+      const allowing = new SsrfGuard({
+        resolve: failing,
+        allowHosts: ['127.0.0.1'],
+      });
+      const strict = new SsrfGuard({ resolve: failing });
+
+      await expect(allowing.refusalReason(url)).resolves.toBeUndefined();
+      await expect(strict.refusalReason(url)).resolves.toMatch(/loopback/);
+    });
+  });
+});

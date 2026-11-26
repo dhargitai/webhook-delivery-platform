@@ -4,6 +4,7 @@ import {
   IdempotencyConflictError,
   NotFoundError,
   RateLimitExceededError,
+  UrlNotAllowedError,
 } from '@wdp/domain';
 import {
   RequestValidationError,
@@ -74,6 +75,16 @@ export function toProblem(exception: unknown): Problem {
       title: 'Idempotency key reused',
       detail: exception.message,
       code: exception.code,
+    });
+  }
+  if (exception instanceof UrlNotAllowedError) {
+    // The reason also goes on the url field, where clients already read the
+    // syntax rejections of the same field.
+    return problem(422, {
+      title: 'URL not allowed',
+      detail: exception.reason,
+      code: exception.code,
+      errors: [{ path: 'url', message: exception.reason }],
     });
   }
   if (exception instanceof NotFoundError) {
