@@ -115,7 +115,78 @@ describe('database schema (real Postgres)', () => {
           tenantId,
           'https://hooks.acme.test/in',
         ]),
-      ).rejects.toMatchObject({ code: '23502' });
+      ).rejects.toMatchObject({ code: '23514' }); // check_violation
+    });
+
+    describe('sealed signing secret', () => {
+      /** A well-formed sealed secret's columns; the bytes need not decrypt. */
+      const sealed = () => ({
+        secret_kek_id: 'v1',
+        secret_wrapped_dek: Buffer.alloc(60, 1),
+        secret_iv: Buffer.alloc(12, 2),
+        secret_ciphertext: Buffer.alloc(50, 3),
+        secret_tag: Buffer.alloc(16, 4),
+      });
+
+      async function insertWith(
+        columns: Record<string, string | Buffer | null>,
+      ) {
+        const tenantId = await insertTenant();
+        const names = Object.keys(columns);
+        return pool.query(
+          `INSERT INTO endpoints (tenant_id, url, ${names.join(', ')})
+           VALUES ($1, $2, ${names.map((_, i) => `$${i + 3}`).join(', ')})`,
+          [tenantId, 'https://hooks.acme.test/in', ...Object.values(columns)],
+        );
+      }
+
+      it('accepts a sealed secret without a plaintext one', async () => {
+        await expect(insertWith(sealed())).resolves.toMatchObject({
+          rowCount: 1,
+        });
+      });
+
+      it('rejects a row holding both the plaintext and the sealed secret', async () => {
+        await expect(
+          insertWith({ ...sealed(), signing_secret: 'whsec_test' }),
+        ).rejects.toMatchObject({ code: '23514' });
+      });
+
+      it.each([
+        'secret_kek_id',
+        'secret_wrapped_dek',
+        'secret_iv',
+        'secret_ciphertext',
+        'secret_tag',
+      ])('rejects a sealed secret missing %s', async (column) => {
+        await expect(
+          insertWith({ ...sealed(), [column]: null }),
+        ).rejects.toMatchObject({ code: '23514' });
+      });
+
+      it('rejects a partial sealed secret next to a plaintext one', async () => {
+        await expect(
+          insertWith({
+            signing_secret: 'whsec_test',
+            secret_kek_id: 'v1',
+            secret_iv: Buffer.alloc(12),
+          }),
+        ).rejects.toMatchObject({ code: '23514' });
+      });
+
+      it.each([
+        { name: 'an 11-byte IV', change: { secret_iv: Buffer.alloc(11) } },
+        { name: 'a 4-byte tag', change: { secret_tag: Buffer.alloc(4) } },
+        {
+          name: 'a 59-byte wrapped DEK',
+          change: { secret_wrapped_dek: Buffer.alloc(59) },
+        },
+        { name: 'an empty KEK id', change: { secret_kek_id: '' } },
+      ])('rejects a sealed secret with $name', async ({ change }) => {
+        await expect(
+          insertWith({ ...sealed(), ...change }),
+        ).rejects.toMatchObject({ code: '23514' });
+      });
     });
 
     it.each(['0', '-1', 'Infinity', 'NaN'])(

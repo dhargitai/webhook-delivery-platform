@@ -23,6 +23,9 @@ export class KyselyEndpointTargetLookup extends EndpointTargetLookup {
       .where('tenant_id', '=', tenantId)
       .executeTakeFirst();
     if (!row) return null;
+    if (row.signing_secret === null) {
+      throw new Error(`endpoint ${endpointId} has no plaintext signing secret`);
+    }
     return {
       url: row.url,
       signingSecret: row.signing_secret,

@@ -3,6 +3,13 @@ import type { ColumnType, Generated } from 'kysely';
 /** Postgres timestamptz: read as a Date, written as a Date or ISO string. */
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
 
+/** A nullable bytea part of a sealed secret, read and written as a Buffer. */
+type SealedColumn = ColumnType<
+  Buffer | null,
+  Buffer | null | undefined,
+  Buffer | null
+>;
+
 export interface TenantsTable {
   id: Generated<string>;
   name: string;
@@ -26,8 +33,26 @@ export interface EndpointsTable {
   id: Generated<string>;
   tenant_id: string;
   url: string;
-  /** `whsec_...`, plaintext until secrets are encrypted at rest. */
-  signing_secret: string;
+  /**
+   * `whsec_...` in plaintext: only on rows that predate the sealed columns and
+   * that the ops backfill has not sealed yet. Exactly one of this and the
+   * sealed secret is set (a check constraint).
+   */
+  signing_secret: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
+  /** The sealed signing secret (`SealedSecret`): all five set, or none. */
+  secret_kek_id: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
+  secret_wrapped_dek: SealedColumn;
+  secret_iv: SealedColumn;
+  secret_ciphertext: SealedColumn;
+  secret_tag: SealedColumn;
   description: ColumnType<
     string | null,
     string | null | undefined,

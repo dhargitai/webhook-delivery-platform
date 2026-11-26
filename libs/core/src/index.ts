@@ -38,6 +38,10 @@ export {
   CachedSecretOpener,
   type CachedSecretOpenerOptions,
 } from './secrets/cached-secret-opener.js';
+export {
+  sealPlaintextSecrets,
+  type SealPlaintextSecretsOptions,
+} from './secrets/seal-plaintext-secrets.js';
 export { SignatureService } from './signature-service.js';
 export {
   isBlockedAddress,
