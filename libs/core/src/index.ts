@@ -34,6 +34,10 @@ export {
   type SecretOpener,
   secretAad,
 } from './secrets/secret-cipher.js';
+export {
+  CachedSecretOpener,
+  type CachedSecretOpenerOptions,
+} from './secrets/cached-secret-opener.js';
 export { SignatureService } from './signature-service.js';
 export {
   isBlockedAddress,
