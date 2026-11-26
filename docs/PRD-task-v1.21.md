@@ -1,8 +1,8 @@
 **Status:** Approved
-**Date:** 2026-11-25
+**Date:** 2026-11-26
 **Author:** David Hargitai
-**Version:** 1.20
-**Source PRD:** PRD-v1.9
+**Version:** 1.21
+**Source PRD:** PRD-v1.10
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -313,7 +313,7 @@ A pure `next(attempt, rng) -> {action, delay, tier, bucket}` (no `now`: nothing 
 **Blocked by:** Task 16
 
 **What to build:**
-21 fixed-TTL tier queues that dead-letter into `retry.ready`, with queue names that encode the scaled delay (a floor can give a tier's three buckets the same delay, so identical names are declared once). Also the short delay queue (5 s, scaled) that returns a parked job to its fresh lane, used by Tasks 24 and 27: one per lane, so it can dead-letter by a fixed routing key straight back to that lane. `retry.ready` reuses the existing quorum arguments (delivery limit and dead-letter exchange); the tier and delay queues are quorum queues with a fixed TTL and no delivery limit, since nothing consumes them. Built as `declareRetryTopology` in `@wdp/messaging`, fed from `RetryPolicy.delays()` and `parkDelayMs`; a worker publishes to a queue by name (`retryTierQueue(delay)`, `parkQueue(delay, lane)`) on the default exchange.
+21 fixed-TTL tier queues that dead-letter into `retry.ready`, with queue names that encode the scaled delay (a floor can give a tier's three buckets the same delay, so identical names are declared once). Also the short delay queue (5 s, scaled) that returns a parked job to its fresh lane, used by Tasks 24 and 27: one per lane, so it can dead-letter by a fixed routing key straight back to that lane. `retry.ready` reuses the existing quorum arguments (delivery limit and dead-letter exchange); the tier and delay queues are quorum queues with a fixed TTL and no delivery limit, since nothing consumes them. Built as `declareRetryTopology` in `@wdp/messaging`, fed from `RetryPolicy.delays()` and `parkDelayMs`; a worker publishes to a queue by name (`retryTierQueue(delay)`, `parkQueue(delay, lane)`) on the default exchange. Since Task 28 a parked retry waits in one retry delay queue (`retryParkQueue(delay)`) that returns it to `retry.ready` instead.
 
 **Acceptance Criteria:**
 
@@ -464,18 +464,18 @@ Over the cap or rate, park the job in the delay tier without consuming an attemp
 - [x] A hanging endpoint holds at most 20 slots
 - [x] Other endpoints on the same worker keep delivering
 
-### Task 28: Fresh versus retry consumer split ⬜
+### Task 28: Fresh versus retry consumer split ✅
 
 **Original Story:** 17
 **Scope:** `worker`
 **Blocked by:** Task 18
 
 **What to build:**
-Fresh-lane consumers use prefetch 20 and the `retry.ready` consumer uses prefetch 5, with fresh traffic prioritised.
+Fresh-lane consumers use prefetch 20 and the `retry.ready` consumer uses prefetch 5, with fresh traffic prioritised. The split existed since Task 18: `WorkerRunner` consumes each lane on its own channel with `WORKER_PREFETCH` (20) and `retry.ready` on another with `WORKER_RETRY_PREFETCH` (5), and fresh and retry jobs sit in separate queues, so a retry backlog never blocks a lane at the broker. RabbitMQ's consumer priority (`x-priority`) does not apply: it only ranks the consumers of one queue. The gap was a retry deferred by the breaker or the limiter: it was parked to its lane's delay queue and came back on the fresh lane, where it took first-attempt slots outside the retry share. Built as `retryParkQueue(delay)` in `@wdp/messaging` (one quorum queue with the park TTL, dead-lettering to `retry.ready`) and a branch in `BrokerRetryPublisher.park`: a job with `attemptNo > 1` goes there, a first attempt (1 or absent) to its lane's delay queue as before. A deferral never changes the attempt number, so it alone tells the two apart. `worker-fresh-retry-split.int-spec.ts` proves it against real brokers: 40 backed-up retries to a hanging endpoint hold exactly 5 requests while 20 fresh jobs on the same lane each arrive within 1 s, and rate-limited retries all come back through `retry.ready`, none by the fresh lane.
 
 **Acceptance Criteria:**
 
-- [ ] With retries backed up, fresh deliveries still meet the first-attempt target
+- [x] With retries backed up, fresh deliveries still meet the first-attempt target
 
 ### Task 29: Secret rotation with overlap ⬜
 
