@@ -53,6 +53,25 @@ export interface EndpointsTable {
   secret_iv: SealedColumn;
   secret_ciphertext: SealedColumn;
   secret_tag: SealedColumn;
+  /**
+   * The secret signed with before the last rotation (`SealedSecret`, same
+   * AAD), kept until `previous_secret_expires_at`: all six set, or none.
+   */
+  previous_secret_kek_id: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
+  previous_secret_wrapped_dek: SealedColumn;
+  previous_secret_iv: SealedColumn;
+  previous_secret_ciphertext: SealedColumn;
+  previous_secret_tag: SealedColumn;
+  /** The end of the rotation overlap; past it, only the current secret signs. */
+  previous_secret_expires_at: ColumnType<
+    Date | null,
+    Date | string | null | undefined,
+    Date | string | null
+  >;
   description: ColumnType<
     string | null,
     string | null | undefined,
