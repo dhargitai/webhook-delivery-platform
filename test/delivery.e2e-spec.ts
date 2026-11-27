@@ -8,6 +8,7 @@ import {
   createDatabase,
   type Database,
   generateApiKey,
+  generateEndpointSecret,
   SignatureService,
 } from '@wdp/core';
 import {
@@ -17,7 +18,7 @@ import {
 } from '@wdp/core/testing';
 import { deliveryId } from '@wdp/domain';
 import { eventually, testingNamespace } from '@wdp/messaging/testing';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import { type Collection, type Document, MongoClient } from 'mongodb';
 import request from 'supertest';
 import {
@@ -239,6 +240,74 @@ describe('first delivery (e2e)', () => {
         new Date(),
       ),
     ).toBe(true);
+  });
+
+  describe('secret rotation', () => {
+    /** Rotates the endpoint's secret through the API; returns the new one. */
+    async function rotate(key: string, id: string): Promise<string> {
+      const res = await request(api.getHttpServer())
+        .post(`/v1/endpoints/${id}/secret-rotations`)
+        .set('Authorization', `Bearer ${key}`);
+      expect(res.status).toBe(201);
+      return res.body.secret as string;
+    }
+
+    /** Whether the delivery's signature header verifies with `secrets` alone. */
+    const verifiesWith = (delivery: Received, secrets: string[]) =>
+      signatures.verify(
+        String(delivery.headers['webhook-signature']),
+        String(delivery.headers['webhook-id']),
+        Number(delivery.headers['webhook-timestamp']),
+        delivery.body,
+        secrets,
+        new Date(),
+      );
+
+    const entries = (delivery: Received) =>
+      String(delivery.headers['webhook-signature']).split(' ');
+
+    it('signs with both secrets during the overlap, so either one verifies', async () => {
+      const { key } = await seedTenant();
+      const endpoint = await registerEndpoint(key, '/rotating', [
+        'invoice.paid',
+      ]);
+      const next = await rotate(key, endpoint.id);
+
+      await postEvent(key, 'invoice.paid');
+
+      await eventually(() => expect(to('/rotating')).toHaveLength(1));
+      const [delivery] = to('/rotating') as [Received];
+      expect(entries(delivery)).toHaveLength(2);
+      // A receiver still on the old secret and one already on the new both
+      // accept it, so the new secret can be deployed without dropping any.
+      expect(verifiesWith(delivery, [endpoint.secret])).toBe(true);
+      expect(verifiesWith(delivery, [next])).toBe(true);
+      expect(verifiesWith(delivery, [generateEndpointSecret()])).toBe(false);
+    });
+
+    it('signs with the new secret only once the overlap has ended', async () => {
+      const { key } = await seedTenant();
+      const endpoint = await registerEndpoint(key, '/rotated', [
+        'invoice.paid',
+      ]);
+      const next = await rotate(key, endpoint.id);
+      // The 24 h pass in the database, the clock the worker checks them by.
+      await db
+        .updateTable('endpoints')
+        .set({
+          previous_secret_expires_at: sql<Date>`now() - interval '1 second'`,
+        })
+        .where('id', '=', endpoint.id)
+        .execute();
+
+      await postEvent(key, 'invoice.paid');
+
+      await eventually(() => expect(to('/rotated')).toHaveLength(1));
+      const [delivery] = to('/rotated') as [Received];
+      expect(entries(delivery)).toHaveLength(1);
+      expect(verifiesWith(delivery, [next])).toBe(true);
+      expect(verifiesWith(delivery, [endpoint.secret])).toBe(false);
+    });
   });
 
   it('logs the attempt, so it can be found by event and endpoint', async () => {
