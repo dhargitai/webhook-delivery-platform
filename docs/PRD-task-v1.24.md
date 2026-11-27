@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-26
 **Author:** David Hargitai
-**Version:** 1.23
+**Version:** 1.24
 **Source PRD:** PRD-v1.10
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -380,19 +380,19 @@ On SIGTERM, cancel consumers, finish in-flight work within the 30 s grace period
 
 ### Phase 3: Resilience and fairness
 
-### Task 22: Secrets encrypted at rest ⬜
+### Task 22: Secrets encrypted at rest ✅
 
 **Original Story:** Security
 **Scope:** `core`, `api`, `worker`
 **Blocked by:** Task 9
 
 **What to build:**
-AES-256-GCM envelope encryption behind a `KeyProvider` port, with the KEK from `SECRETS_KEK_V1` and a 60 s decrypted cache in the worker.
+AES-256-GCM envelope encryption behind a `KeyProvider` port, with the KEK from `SECRETS_KEK_V1` and a 60 s decrypted cache in the worker. Built in `@wdp/core` as `KeyProvider` (async `wrap`/`unwrap`, shaped like a KMS), `EnvKeyProvider` (one KEK, id `v1`; a wrapped DEK is `iv(12) ‖ ciphertext(32) ‖ tag(16)`), `SecretCipher` (`seal`/`open`, a fresh DEK and IV per secret, the DEK zeroed after use), `secretAad(tenantId, endpointId)` and `parseKek` (strict base64 of 32 bytes). The AAD binds each sealed secret to its tenant and endpoint, so a ciphertext copied onto another row does not open; the API therefore chooses the endpoint's UUID before the insert, and `EndpointsRepository.create` takes it. Migration 0007 is the expand step: five nullable sealed columns (`secret_kek_id`, `secret_wrapped_dek`, `secret_iv`, `secret_ciphertext`, `secret_tag`), `signing_secret` made nullable, and checks that keep a sealed secret whole or absent, exactly one form per row, and the sizes the cipher writes. `sealPlaintextSecrets` seals the rows that predate it in place, keeping each `whsec_` so receivers still verify, in batches `FOR UPDATE SKIP LOCKED`; the ops `seal-secrets` command (`db:seal-secrets`) runs it, and Compose's `migrate` one-shot runs it after the migrations, before any service starts. The worker's `KyselyEndpointTargetLookup` opens the sealed columns through `SECRET_OPENER`, a `CachedSecretOpener` that keeps opened secrets 60 s keyed by AAD and IV (a new seal, such as a rotation, is a miss at once), and refuses a row still in plaintext. `SECRETS_KEK_V1` is required by the API, the worker and `seal-secrets`; Compose sets a dev-only key. Not built: the contract migration that drops `signing_secret`, KEK rotation (re-wrapping DEKs under a `v2`, which `secret_kek_id` already allows), and a boot-time KEK check: a wrong KEK makes the worker's lookup reject, which dead-letters the job.
 
 **Acceptance Criteria:**
 
-- [ ] No plaintext secret is stored in Postgres
-- [ ] The worker signs correctly using decrypted secrets
+- [x] No plaintext secret is stored in Postgres
+- [x] The worker signs correctly using decrypted secrets
 
 ### Task 23: CircuitBreaker module ✅
 
