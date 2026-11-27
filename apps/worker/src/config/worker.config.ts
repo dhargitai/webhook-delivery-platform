@@ -10,6 +10,7 @@ export const workerConfig = registerAs('worker', () => {
     mongoUrl: env.MONGO_URL,
     mongoDb: env.MONGO_DB,
     redisUrl: env.REDIS_URL,
+    secretsKek: env.SECRETS_KEK_V1,
     brokerNamespace: env.BROKER_NAMESPACE,
     laneCount: env.LANE_COUNT,
     prefetch: env.WORKER_PREFETCH,

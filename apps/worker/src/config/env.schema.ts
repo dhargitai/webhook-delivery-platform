@@ -1,3 +1,4 @@
+import { parseKek } from '@wdp/core';
 import { z } from 'zod';
 
 /**
@@ -17,6 +18,20 @@ export const envSchema = z.object({
   // The Redis server that holds every endpoint's circuit breaker state,
   // shared by all workers.
   REDIS_URL: z.string().min(1),
+  // Base64 of the 32-byte key-encryption key that wraps every endpoint
+  // secret's data key (AES-256-GCM). No default: a missing or malformed key
+  // stops the app at boot. Generate one with `openssl rand -base64 32`.
+  SECRETS_KEK_V1: z.string().transform((value, ctx) => {
+    try {
+      return parseKek(value);
+    } catch (error) {
+      ctx.addIssue({
+        code: 'custom',
+        message: error instanceof Error ? error.message : 'invalid KEK',
+      });
+      return z.NEVER;
+    }
+  }),
   // Prefix of every exchange and queue. Services of one deployment share it.
   BROKER_NAMESPACE: z.string().min(1).default('wdp'),
   // Number of fresh-delivery lanes the worker consumes: 4 locally, 16 in the

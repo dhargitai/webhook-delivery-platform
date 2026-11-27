@@ -3,21 +3,39 @@ import type { Kysely } from 'kysely';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { createDatabase, type Database } from '../db/database.js';
 import { generateEndpointSecret } from '../endpoint-secret.js';
+import type { SealedSecret, SecretOpener } from '../secrets/secret-cipher.js';
+import {
+  sealedSecretColumns,
+  testCipher,
+  testKek,
+} from '../testing/sealed-secret.js';
 import {
   createTestDatabase,
   type TestDatabase,
 } from '../testing/test-database.js';
 import { KyselyEndpointTargetLookup } from './kysely-endpoint-target-lookup.js';
 
+/** Opens with the real cipher and remembers what it was asked. */
+class RecordingOpener implements SecretOpener {
+  readonly calls: { sealed: SealedSecret; aad: string }[] = [];
+  constructor(private readonly inner: SecretOpener) {}
+  open(sealed: SealedSecret, aad: string): Promise<string> {
+    this.calls.push({ sealed, aad });
+    return this.inner.open(sealed, aad);
+  }
+}
+
 describe('KyselyEndpointTargetLookup (real Postgres)', () => {
   let testDb: TestDatabase;
   let db: Kysely<Database>;
   let lookup: KyselyEndpointTargetLookup;
+  const cipher = testCipher(testKek());
+  const opener = new RecordingOpener(cipher);
 
   beforeAll(async () => {
     testDb = await createTestDatabase(inject('postgresAdminUrl'));
     db = createDatabase(testDb.url);
-    lookup = new KyselyEndpointTargetLookup(db);
+    lookup = new KyselyEndpointTargetLookup(db, opener);
   });
 
   afterAll(async () => {
@@ -50,19 +68,20 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
       burst?: number | null;
     } = {},
   ): Promise<string> {
-    const row = await db
+    const id = randomUUID();
+    await db
       .insertInto('endpoints')
       .values({
+        id,
         tenant_id: tenantId,
         url,
-        signing_secret: secret,
+        ...(await sealedSecretColumns(cipher, tenantId, id, secret)),
         status,
         rate_per_second: ratePerSecond,
         burst,
       })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    return row.id;
+      .execute();
+    return id;
   }
 
   it('returns the url, the signing secret and the status of an endpoint', async () => {
@@ -80,6 +99,58 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
       // No override stored: the limiter's defaults apply.
       rate: {},
     });
+  });
+
+  it('opens the sealed secret with the opener, bound to the tenant and endpoint', async () => {
+    const tenantId = await createTenant();
+    const id = await addEndpoint(tenantId);
+    opener.calls.length = 0;
+
+    await lookup.find(tenantId, id);
+
+    expect(opener.calls).toHaveLength(1);
+    expect(opener.calls[0]?.aad).toBe(
+      `wdp:endpoint-secret:v1:${tenantId}:${id}`,
+    );
+  });
+
+  it('refuses a sealed secret copied from another endpoint', async () => {
+    const tenantId = await createTenant();
+    const source = await addEndpoint(tenantId);
+    const target = await addEndpoint(tenantId);
+    const sealed = await db
+      .selectFrom('endpoints')
+      .select([
+        'secret_kek_id',
+        'secret_wrapped_dek',
+        'secret_iv',
+        'secret_ciphertext',
+        'secret_tag',
+      ])
+      .where('id', '=', source)
+      .executeTakeFirstOrThrow();
+    await db
+      .updateTable('endpoints')
+      .set(sealed)
+      .where('id', '=', target)
+      .execute();
+
+    await expect(lookup.find(tenantId, target)).rejects.toThrow();
+  });
+
+  it('refuses an endpoint whose secret is still in plaintext', async () => {
+    const tenantId = await createTenant();
+    const row = await db
+      .insertInto('endpoints')
+      .values({
+        tenant_id: tenantId,
+        url: 'https://hooks.acme.test/in',
+        signing_secret: generateEndpointSecret(),
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    await expect(lookup.find(tenantId, row.id)).rejects.toThrow(/sealed/);
   });
 
   it('returns the endpoint’s stored rate override', async () => {

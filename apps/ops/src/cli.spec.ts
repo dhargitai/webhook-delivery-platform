@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSeedArgs, readDatabaseUrl } from './cli.js';
+import { parseSeedArgs, readDatabaseUrl, readKek } from './cli.js';
 
 describe('readDatabaseUrl', () => {
   it('returns DATABASE_URL', () => {
@@ -14,6 +14,32 @@ describe('readDatabaseUrl', () => {
     { name: 'blank', env: { DATABASE_URL: '   ' } },
   ])('explains what to set when it is $name', ({ env }) => {
     expect(() => readDatabaseUrl(env)).toThrow(/DATABASE_URL/);
+  });
+});
+
+describe('readKek', () => {
+  const key = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
+
+  it('decodes SECRETS_KEK_V1', () => {
+    expect(readKek({ SECRETS_KEK_V1: key.toString('base64') })).toEqual(key);
+  });
+
+  it.each([
+    { name: 'missing', env: {} },
+    { name: 'empty', env: { SECRETS_KEK_V1: '' } },
+  ])('explains what to set when it is $name', ({ env }) => {
+    expect(() => readKek(env)).toThrow(/SECRETS_KEK_V1.*openssl rand/s);
+  });
+
+  it('refuses a malformed key without echoing it', () => {
+    const value = Buffer.alloc(31, 9).toString('base64');
+
+    expect(() => readKek({ SECRETS_KEK_V1: value })).toThrow(/SECRETS_KEK_V1/);
+    expect(() => readKek({ SECRETS_KEK_V1: value })).toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining(value),
+      }),
+    );
   });
 });
 

@@ -1,9 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import {
-  createDatabase,
-  type Database,
-  generateEndpointSecret,
-} from '@wdp/core';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createDatabase, type Database, type SealedSecret } from '@wdp/core';
 import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
 import type { Kysely } from 'kysely';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
@@ -37,13 +33,23 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
 
   const input = { url: 'https://hooks.acme.test/in', description: null };
 
+  /** A well-formed sealed secret; the repository stores it and never opens it. */
+  const aSealedSecret = (): SealedSecret => ({
+    kekId: 'v1',
+    wrappedDek: randomBytes(60),
+    iv: randomBytes(12),
+    ciphertext: randomBytes(50),
+    tag: randomBytes(16),
+  });
+
   it('stores an endpoint and reads it back', async () => {
     const tenantId = await createTenant();
 
     const created = await repo.create(
       tenantId,
+      randomUUID(),
       { url: 'https://hooks.acme.test/in', description: 'billing' },
-      generateEndpointSecret(),
+      aSealedSecret(),
     );
     const found = await repo.find(tenantId, created.id);
 
@@ -58,30 +64,49 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
   });
 
   describe('signing secret', () => {
-    it('stores the secret it is given', async () => {
+    it('stores the endpoint under its id with the sealed secret it is given, and no plaintext', async () => {
       const tenantId = await createTenant();
-      const secret = generateEndpointSecret();
+      const id = randomUUID();
+      const sealed = aSealedSecret();
 
-      const endpoint = await repo.create(tenantId, input, secret);
+      const endpoint = await repo.create(tenantId, id, input, sealed);
 
+      expect(endpoint.id).toBe(id);
       const row = await db
         .selectFrom('endpoints')
-        .select('signing_secret')
-        .where('id', '=', endpoint.id)
+        .select([
+          'signing_secret',
+          'secret_kek_id',
+          'secret_wrapped_dek',
+          'secret_iv',
+          'secret_ciphertext',
+          'secret_tag',
+        ])
+        .where('id', '=', id)
         .executeTakeFirstOrThrow();
-      expect(row.signing_secret).toBe(secret);
+      expect(row).toEqual({
+        signing_secret: null,
+        secret_kek_id: sealed.kekId,
+        secret_wrapped_dek: sealed.wrappedDek,
+        secret_iv: sealed.iv,
+        secret_ciphertext: sealed.ciphertext,
+        secret_tag: sealed.tag,
+      });
     });
 
-    it('never returns the secret when reading', async () => {
+    it('never returns the sealed secret when reading', async () => {
       const tenantId = await createTenant();
-      const secret = generateEndpointSecret();
-      const created = await repo.create(tenantId, input, secret);
+      const sealed = aSealedSecret();
+      const created = await repo.create(tenantId, randomUUID(), input, sealed);
 
       const found = await repo.find(tenantId, created.id);
       const listed = await repo.list(tenantId);
 
       for (const endpoint of [created, found, ...listed]) {
-        expect(JSON.stringify(endpoint)).not.toContain(secret);
+        const text = JSON.stringify(endpoint);
+        expect(text).not.toContain(sealed.ciphertext.toString('base64'));
+        expect(endpoint).not.toHaveProperty('secret_ciphertext');
+        expect(endpoint).not.toHaveProperty('signingSecret');
       }
     });
   });
@@ -92,8 +117,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const other = await createTenant();
       const endpoint = await repo.create(
         owner,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
 
       expect(await repo.find(other, endpoint.id)).toBeNull();
@@ -106,8 +132,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const other = await createTenant();
       const endpoint = await repo.create(
         owner,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       await repo.replaceSubscriptions(owner, endpoint.id, ['invoice.paid']);
 
@@ -126,18 +153,21 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const first = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       const second = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       const third = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
 
       const listed = await repo.list(tenantId);
@@ -151,8 +181,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
 
@@ -179,8 +210,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
 
@@ -196,8 +228,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
 
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
@@ -213,8 +246,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a']);
 
@@ -227,8 +261,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
 
       await repo.replaceSubscriptions(tenantId, endpoint.id, ['a', 'b']);
@@ -245,8 +280,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
       await repo.replaceSubscriptions(tenantId, endpoint.id, [
         'keep-1',
@@ -269,8 +305,9 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
       const tenantId = await createTenant();
       const endpoint = await repo.create(
         tenantId,
+        randomUUID(),
         input,
-        generateEndpointSecret(),
+        aSealedSecret(),
       );
 
       const results = await Promise.allSettled(

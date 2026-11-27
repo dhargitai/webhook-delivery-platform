@@ -3,7 +3,7 @@ import type { EndpointRate } from '../endpoint-limiter.js';
 /** What the worker needs to call an endpoint. */
 export interface EndpointTarget {
   url: string;
-  /** Plaintext until Task 22 encrypts it at rest. Never log it. */
+  /** Opened from its sealed form, in memory only. Never log it. */
   signingSecret: string;
   status: 'active' | 'disabled';
   /**
@@ -23,6 +23,8 @@ export abstract class EndpointTargetLookup {
    * The target of one endpoint, or `null` when it does not exist, was deleted
    * since the job was queued, or belongs to another tenant. A disabled
    * endpoint is returned as such, so the caller decides what to do with it.
+   * Rejects when its secret cannot be opened (not sealed yet, a wrong KEK,
+   * tampering).
    */
   abstract find(
     tenantId: string,

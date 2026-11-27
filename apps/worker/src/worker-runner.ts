@@ -22,6 +22,7 @@ import {
   type MongoAttemptLog,
   RetryPolicy,
   SafeHttpClient,
+  type SecretOpener,
   SignatureService,
   SsrfGuard,
 } from '@wdp/core';
@@ -39,7 +40,12 @@ import { BrokerRetryPublisher } from './broker-retry-publisher.js';
 import { workerConfig } from './config/worker.config.js';
 import { JobMessageHandler } from './job-message-handler.js';
 import { type RetryHandled, RetryHandler } from './retry-handler.js';
-import { ATTEMPT_LOG, CIRCUIT_BREAKER, ENDPOINT_LIMITER } from './tokens.js';
+import {
+  ATTEMPT_LOG,
+  CIRCUIT_BREAKER,
+  ENDPOINT_LIMITER,
+  SECRET_OPENER,
+} from './tokens.js';
 
 /**
  * Owns the worker's lifecycle. Nest runs each shutdown phase for the whole app
@@ -62,6 +68,7 @@ export class WorkerRunner
     @Inject(ATTEMPT_LOG) private readonly attemptLog: MongoAttemptLog,
     @Inject(CIRCUIT_BREAKER) private readonly breaker: EndpointCircuit,
     @Inject(ENDPOINT_LIMITER) private readonly limiter: EndpointSlots,
+    @Inject(SECRET_OPENER) private readonly secrets: SecretOpener,
     @Inject(workerConfig.KEY)
     private readonly config: ConfigType<typeof workerConfig>,
   ) {}
@@ -120,7 +127,7 @@ export class WorkerRunner
     const handler = new RetryHandler(
       new JobMessageHandler(
         new DeliveryAttempt({
-          lookup: new KyselyEndpointTargetLookup(this.db),
+          lookup: new KyselyEndpointTargetLookup(this.db, this.secrets),
           client: new SafeHttpClient({
             lookup: guard.lookup,
             hostCheck: (hostname) => guard.blockedHostReason(hostname),

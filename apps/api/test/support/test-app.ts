@@ -1,7 +1,17 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
-import { createDatabase, generateApiKey, type Database } from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+import {
+  createDatabase,
+  generateApiKey,
+  type Database,
+  type SecretCipher,
+} from '@wdp/core';
+import {
+  createTestDatabase,
+  testCipher,
+  testKek,
+  type TestDatabase,
+} from '@wdp/core/testing';
 import type { Kysely } from 'kysely';
 import { inject } from 'vitest';
 
@@ -9,6 +19,8 @@ export interface TestApp {
   app: NestExpressApplication;
   /** Direct database access, for seeding and for asserting on stored state. */
   db: Kysely<Database>;
+  /** Built from the app's own KEK, to open what it stored. */
+  cipher: SecretCipher;
   /** A fresh tenant with its own API key, so buckets and data never overlap. */
   seedTenant(): Promise<{ tenantId: string; key: string }>;
   close(): Promise<void>;
@@ -29,6 +41,9 @@ export async function startTestApp(
   // evaluated, so the variables must exist before that import.
   process.env.DATABASE_URL = testDb.url;
   process.env.REDIS_URL = inject('redisUrl');
+  // A KEK of its own, unless the spec brings one.
+  const kek = env.SECRETS_KEK_V1 ?? testKek();
+  process.env.SECRETS_KEK_V1 = kek;
   Object.assign(process.env, env);
 
   const { AppModule } = await import('../../src/app.module.js');
@@ -46,6 +61,7 @@ export async function startTestApp(
   return {
     app,
     db,
+    cipher: testCipher(kek),
     async seedTenant() {
       const tenant = await db
         .insertInto('tenants')

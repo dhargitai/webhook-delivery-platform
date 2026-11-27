@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { Database } from '@wdp/core';
+import type { Database, SealedSecret } from '@wdp/core';
 import { type Kysely, sql } from 'kysely';
 import { DATABASE } from '@wdp/common';
 import {
@@ -36,16 +36,23 @@ export class KyselyEndpointsRepository extends EndpointsRepository {
 
   async create(
     tenantId: string,
+    id: string,
     input: NewEndpoint,
-    signingSecret: string,
+    signingSecret: SealedSecret,
   ): Promise<Endpoint> {
     const row = await this.db
       .insertInto('endpoints')
       .values({
+        id,
         tenant_id: tenantId,
         url: input.url,
         description: input.description,
-        signing_secret: signingSecret,
+        // Sealed only; the plaintext column is left NULL.
+        secret_kek_id: signingSecret.kekId,
+        secret_wrapped_dek: signingSecret.wrappedDek,
+        secret_iv: signingSecret.iv,
+        secret_ciphertext: signingSecret.ciphertext,
+        secret_tag: signingSecret.tag,
       })
       .returningAll()
       .executeTakeFirstOrThrow();

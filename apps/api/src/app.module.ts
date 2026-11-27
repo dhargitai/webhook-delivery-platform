@@ -8,6 +8,7 @@ import { databaseConfig } from './config/database.config.js';
 import { envSchema } from './config/env.schema.js';
 import { ingestConfig } from './config/ingest.config.js';
 import { redisConfig } from './config/redis.config.js';
+import { secretsConfig } from './config/secrets.config.js';
 import { ssrfConfig } from './config/ssrf.config.js';
 import { EndpointsModule } from './endpoints/endpoints.module.js';
 import { EventsModule } from './events/events.module.js';
@@ -18,7 +19,14 @@ import { InfrastructureModule } from './infrastructure/infrastructure.module.js'
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
-      load: [appConfig, databaseConfig, redisConfig, ingestConfig, ssrfConfig],
+      load: [
+        appConfig,
+        databaseConfig,
+        redisConfig,
+        ingestConfig,
+        ssrfConfig,
+        secretsConfig,
+      ],
       validationSchema: envSchema,
     }),
     InfrastructureModule,

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { type ConfigType } from '@nestjs/config';
-import { SsrfGuard } from '@wdp/core';
+import { EnvKeyProvider, SecretCipher, SsrfGuard } from '@wdp/core';
+import { secretsConfig } from '../config/secrets.config.js';
 import { ssrfConfig } from '../config/ssrf.config.js';
 import { EndpointsController } from './endpoints.controller.js';
 import { EndpointsRepository } from './endpoints.repository.js';
@@ -19,6 +20,14 @@ import { KyselyEndpointsRepository } from './kysely-endpoints.repository.js';
       inject: [ssrfConfig.KEY],
       useFactory: (config: ConfigType<typeof ssrfConfig>) =>
         new SsrfGuard({ allowHosts: config.allowHosts }),
+    },
+    {
+      // Seals each new endpoint's secret under the environment's KEK. The
+      // KEK id is stored with every secret, so a later key can sit beside it.
+      provide: SecretCipher,
+      inject: [secretsConfig.KEY],
+      useFactory: (config: ConfigType<typeof secretsConfig>) =>
+        new SecretCipher(new EnvKeyProvider({ kekId: 'v1', key: config.kek })),
     },
   ],
 })

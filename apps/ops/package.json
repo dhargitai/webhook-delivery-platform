@@ -7,7 +7,8 @@
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc -p tsconfig.build.json",
     "migrate": "node dist/migrate.js",
-    "seed": "node dist/seed.js"
+    "seed": "node dist/seed.js",
+    "seal-secrets": "node dist/seal-secrets.js"
   },
   "dependencies": {
     "@wdp/core": "workspace:*",

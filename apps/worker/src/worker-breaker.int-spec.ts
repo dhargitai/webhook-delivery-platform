@@ -8,10 +8,15 @@ import {
   createDatabase,
   type Database,
   type DeliveryJob,
-  generateEndpointSecret,
   LaneRouter,
 } from '@wdp/core';
-import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
+import {
+  createTestDatabase,
+  type TestDatabase,
+  sealedEndpointRow,
+  testCipher,
+  testKek,
+} from '@wdp/core/testing';
 import {
   BrokerConnection,
   ConfirmPublisher,
@@ -26,6 +31,10 @@ import type { Kysely } from 'kysely';
 import { type Collection, type Document, MongoClient } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { CIRCUIT_BREAKER } from './tokens.js';
+
+// The worker opens endpoint secrets with this key; the spec seals them with it.
+const KEK = testKek();
+const cipher = testCipher(KEK);
 
 const LANES = 4;
 
@@ -116,6 +125,7 @@ describe('the circuit breaker in the worker (real Postgres, RabbitMQ, MongoDB an
     process.env.BROKER_NAMESPACE = namespace;
     process.env.LANE_COUNT = String(LANES);
     process.env.SSRF_ALLOW_HOSTS = 'localhost';
+    process.env.SECRETS_KEK_V1 = KEK;
     process.env.TIME_SCALE = String(TIME_SCALE);
     process.env.RETRY_MIN_DELAY_MS = String(RETRY_MIN_DELAY_MS);
     const { WorkerModule } = await import('./worker.module.js');
@@ -162,9 +172,9 @@ describe('the circuit breaker in the worker (real Postgres, RabbitMQ, MongoDB an
     const row = await db
       .insertInto('endpoints')
       .values({
+        ...(await sealedEndpointRow(cipher, tenantId)),
         tenant_id: tenantId,
         url: `${receiverBase}/${key}`,
-        signing_secret: generateEndpointSecret(),
         status: 'active',
       })
       .returning('id')
