@@ -106,8 +106,10 @@ export class DeliveryAttempt {
     // inside the receiver's tolerance window.
     const webhookId = job.deliveryId;
     const timestamp = Math.floor(this.deps.now().getTime() / 1000);
+    // One signature per secret: during a rotation overlap a receiver still on
+    // the previous secret verifies the request as well as one on the new.
     const signature = this.deps.signatures.sign(
-      [target.signingSecret],
+      target.signingSecrets,
       webhookId,
       timestamp,
       body,

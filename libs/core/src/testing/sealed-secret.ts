@@ -37,6 +37,29 @@ export async function sealedSecretColumns(
 }
 
 /**
+ * The `endpoints` columns of a previous (pre-rotation) secret sealed for one
+ * endpoint, signing until `expiresAt`. Bound to the endpoint like the current
+ * secret, so the same id rule applies.
+ */
+export async function sealedPreviousSecretColumns(
+  cipher: SecretCipher,
+  tenantId: string,
+  endpointId: string,
+  secret: string,
+  expiresAt: Date,
+) {
+  const sealed = await cipher.seal(secret, secretAad(tenantId, endpointId));
+  return {
+    previous_secret_kek_id: sealed.kekId,
+    previous_secret_wrapped_dek: sealed.wrappedDek,
+    previous_secret_iv: sealed.iv,
+    previous_secret_ciphertext: sealed.ciphertext,
+    previous_secret_tag: sealed.tag,
+    previous_secret_expires_at: expiresAt,
+  };
+}
+
+/**
  * The id and sealed-secret columns of a new endpoint row, for specs that
  * insert endpoints directly: spread into `.values({...})`.
  */
