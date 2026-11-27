@@ -4,6 +4,7 @@ import {
   IdempotencyConflictError,
   NotFoundError,
   RateLimitExceededError,
+  SecretRotationInProgressError,
   UrlNotAllowedError,
 } from '@wdp/domain';
 import {
@@ -89,6 +90,13 @@ export function toProblem(exception: unknown): Problem {
   }
   if (exception instanceof NotFoundError) {
     return problem(404, { detail: exception.message, code: exception.code });
+  }
+  if (exception instanceof SecretRotationInProgressError) {
+    return problem(409, {
+      title: 'Secret rotation in progress',
+      detail: exception.message,
+      code: exception.code,
+    });
   }
   if (exception instanceof RateLimitExceededError) {
     return problem(

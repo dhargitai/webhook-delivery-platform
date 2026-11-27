@@ -190,6 +190,67 @@ describe('endpoints and subscriptions (e2e)', () => {
     });
   });
 
+  describe('secret rotation', () => {
+    const SECRET_PATTERN = /^whsec_[A-Za-z0-9+/]{43}=$/;
+    const DAY_MS = 86_400_000;
+
+    const rotate = (key: string, id: string) =>
+      call('post', `/endpoints/${id}/secret-rotations`, key);
+
+    it('returns the new secret once, and when the old one stops signing', async () => {
+      const { key } = await t.seedTenant();
+      const created = await call('post', '/endpoints', key, {
+        url: 'https://hooks.acme.test/in',
+      });
+
+      const before = Date.now();
+      const rotated = await rotate(key, created.body.id);
+
+      expect(rotated.status).toBe(201);
+      expect(rotated.body.secret).toMatch(SECRET_PATTERN);
+      expect(rotated.body.secret).not.toBe(created.body.secret);
+      const ends = new Date(rotated.body.previous_secret_expires_at).getTime();
+      expect(ends).toBeGreaterThanOrEqual(before + DAY_MS - 5_000);
+      expect(ends).toBeLessThanOrEqual(Date.now() + DAY_MS + 5_000);
+      const read = await call('get', `/endpoints/${created.body.id}`, key);
+      expect(JSON.stringify(read.body)).not.toContain(rotated.body.secret);
+    });
+
+    it('refuses a second rotation during the overlap with a 409 problem', async () => {
+      const { key } = await t.seedTenant();
+      const { id } = await createEndpoint(key);
+      const first = await rotate(key, id);
+
+      const second = await rotate(key, id);
+
+      expect(second.status).toBe(409);
+      expect(second.headers['content-type']).toMatch(PROBLEM_JSON);
+      expect(second.body).toMatchObject({
+        status: 409,
+        code: 'SECRET_ROTATION_IN_PROGRESS',
+      });
+      expect(second.body.detail).toContain(
+        first.body.previous_secret_expires_at,
+      );
+    });
+
+    it("answers 404 for an unknown id or another tenant's endpoint", async () => {
+      const owner = await t.seedTenant();
+      const intruder = await t.seedTenant();
+      const { id } = await createEndpoint(owner.key);
+
+      const foreign = await rotate(intruder.key, id);
+      const unknown = await rotate(owner.key, randomUUID());
+
+      for (const res of [foreign, unknown]) {
+        expect(res.status).toBe(404);
+        expect(res.headers['content-type']).toMatch(PROBLEM_JSON);
+      }
+      // The intruder's attempt started no overlap, so the owner can rotate.
+      expect((await rotate(owner.key, id)).status).toBe(201);
+    });
+  });
+
   it('replaces rather than extends the subscription set', async () => {
     const { key } = await t.seedTenant();
     const { id } = await createEndpoint(key);

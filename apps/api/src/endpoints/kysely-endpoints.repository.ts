@@ -6,6 +6,7 @@ import {
   type Endpoint,
   EndpointsRepository,
   type NewEndpoint,
+  type SecretRotation,
 } from './endpoints.repository.js';
 
 type EndpointRow = {
@@ -57,6 +58,61 @@ export class KyselyEndpointsRepository extends EndpointsRepository {
       .returningAll()
       .executeTakeFirstOrThrow();
     return toEndpoint(row);
+  }
+
+  async rotateSecret(
+    tenantId: string,
+    id: string,
+    next: SealedSecret,
+    overlapSeconds: number,
+  ): Promise<SecretRotation> {
+    // One statement: the SET reads the row as it was, so the current secret
+    // moves to the previous columns without being opened (its AAD names the
+    // endpoint, not the slot). A concurrent rotation waits on the row lock,
+    // then re-checks the WHERE against this one's result and is refused.
+    const rotated = await this.db
+      .updateTable('endpoints')
+      .set((eb) => ({
+        previous_secret_kek_id: eb.ref('secret_kek_id'),
+        previous_secret_wrapped_dek: eb.ref('secret_wrapped_dek'),
+        previous_secret_iv: eb.ref('secret_iv'),
+        previous_secret_ciphertext: eb.ref('secret_ciphertext'),
+        previous_secret_tag: eb.ref('secret_tag'),
+        previous_secret_expires_at: sql<Date>`now() + make_interval(secs => ${overlapSeconds})`,
+        secret_kek_id: next.kekId,
+        secret_wrapped_dek: next.wrappedDek,
+        secret_iv: next.iv,
+        secret_ciphertext: next.ciphertext,
+        secret_tag: next.tag,
+      }))
+      .where('tenant_id', '=', tenantId)
+      .where('id', '=', id)
+      .where((eb) =>
+        eb.or([
+          eb('previous_secret_expires_at', 'is', null),
+          eb('previous_secret_expires_at', '<=', sql<Date>`now()`),
+        ]),
+      )
+      .returning('previous_secret_expires_at')
+      .executeTakeFirst();
+    if (rotated?.previous_secret_expires_at) {
+      return {
+        kind: 'rotated',
+        previousExpiresAt: rotated.previous_secret_expires_at,
+      };
+    }
+    // Nothing updated: either there is no such endpoint for this tenant, or
+    // an earlier rotation's overlap still runs.
+    const existing = await this.db
+      .selectFrom('endpoints')
+      .select('previous_secret_expires_at')
+      .where('tenant_id', '=', tenantId)
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!existing?.previous_secret_expires_at) {
+      return { kind: 'not_found' };
+    }
+    return { kind: 'in_progress', until: existing.previous_secret_expires_at };
   }
 
   async list(tenantId: string): Promise<Endpoint[]> {

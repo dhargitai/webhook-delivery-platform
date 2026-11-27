@@ -2,17 +2,23 @@ import { randomBytes } from 'node:crypto';
 import {
   EnvKeyProvider,
   type HostResolver,
+  SECRET_ROTATION_OVERLAP_SECONDS,
   type SealedSecret,
   SecretCipher,
   secretAad,
   SsrfGuard,
 } from '@wdp/core';
-import { EndpointNotFoundError, UrlNotAllowedError } from '@wdp/domain';
+import {
+  EndpointNotFoundError,
+  SecretRotationInProgressError,
+  UrlNotAllowedError,
+} from '@wdp/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   type Endpoint,
   EndpointsRepository,
   type NewEndpoint,
+  type SecretRotation,
 } from './endpoints.repository.js';
 import { EndpointsService } from './endpoints.service.js';
 
@@ -22,6 +28,14 @@ class FakeEndpointsRepository extends EndpointsRepository {
   readonly subscriptions = new Map<string, string[]>();
   /** What the service handed over, by endpoint id. Never part of an `Endpoint`. */
   readonly secrets = new Map<string, SealedSecret>();
+  /** The secret kept through a rotation's overlap, by endpoint id. */
+  readonly previous = new Map<
+    string,
+    { secret: SealedSecret; expiresAt: Date }
+  >();
+  /** The overlap each rotation was asked for, in seconds. */
+  readonly overlaps: number[] = [];
+  now = new Date('2026-11-28T12:00:00Z');
   private counter = 0;
 
   async create(
@@ -42,6 +56,27 @@ class FakeEndpointsRepository extends EndpointsRepository {
     this.endpoints.set(endpoint.id, endpoint);
     this.secrets.set(endpoint.id, signingSecret);
     return endpoint;
+  }
+
+  async rotateSecret(
+    tenantId: string,
+    id: string,
+    next: SealedSecret,
+    overlapSeconds: number,
+  ): Promise<SecretRotation> {
+    this.overlaps.push(overlapSeconds);
+    const current = this.secrets.get(id);
+    if ((await this.find(tenantId, id)) === null || current === undefined) {
+      return { kind: 'not_found' };
+    }
+    const live = this.previous.get(id);
+    if (live !== undefined && live.expiresAt > this.now) {
+      return { kind: 'in_progress', until: live.expiresAt };
+    }
+    const expiresAt = new Date(this.now.getTime() + overlapSeconds * 1000);
+    this.previous.set(id, { secret: current, expiresAt });
+    this.secrets.set(id, next);
+    return { kind: 'rotated', previousExpiresAt: expiresAt };
   }
 
   async list(tenantId: string): Promise<Endpoint[]> {
@@ -206,6 +241,57 @@ describe('EndpointsService', () => {
     });
   });
 
+  describe('rotateSecret', () => {
+    it('hands out a new secret and stores it sealed for the endpoint', async () => {
+      const created = await service.create('tenant-a', input);
+
+      const rotated = await service.rotateSecret(
+        'tenant-a',
+        created.endpoint.id,
+      );
+
+      expect(rotated.secret).toMatch(/^whsec_[A-Za-z0-9+/]{43}=$/);
+      expect(rotated.secret).not.toBe(created.secret);
+      const stored = repo.secrets.get(created.endpoint.id);
+      await expect(
+        stored &&
+          cipher.open(stored, secretAad('tenant-a', created.endpoint.id)),
+      ).resolves.toBe(rotated.secret);
+    });
+
+    it('keeps the old secret for the 24 h overlap and says when it ends', async () => {
+      const endpoint = await create('tenant-a');
+
+      const rotated = await service.rotateSecret('tenant-a', endpoint.id);
+
+      expect(repo.overlaps).toEqual([SECRET_ROTATION_OVERLAP_SECONDS]);
+      expect(SECRET_ROTATION_OVERLAP_SECONDS).toBe(24 * 60 * 60);
+      expect(rotated.previousExpiresAt).toEqual(
+        repo.previous.get(endpoint.id)?.expiresAt,
+      );
+    });
+
+    it('refuses a second rotation while the overlap lasts, saying until when', async () => {
+      const endpoint = await create('tenant-a');
+      const first = await service.rotateSecret('tenant-a', endpoint.id);
+
+      const second = service.rotateSecret('tenant-a', endpoint.id);
+
+      await expect(second).rejects.toBeInstanceOf(
+        SecretRotationInProgressError,
+      );
+      await expect(second).rejects.toMatchObject({
+        until: first.previousExpiresAt,
+      });
+    });
+
+    it('throws not found for an unknown endpoint id', async () => {
+      await expect(
+        service.rotateSecret('tenant-a', 'nope'),
+      ).rejects.toBeInstanceOf(EndpointNotFoundError);
+    });
+  });
+
   it("lists only the tenant's own endpoints", async () => {
     const mine = await create('tenant-a');
     await create('tenant-b');
@@ -232,6 +318,11 @@ describe('EndpointsService', () => {
         name: 'listSubscriptions',
         act: (s: EndpointsService, id: string) =>
           s.listSubscriptions('tenant-b', id),
+      },
+      {
+        name: 'rotateSecret',
+        act: (s: EndpointsService, id: string) =>
+          s.rotateSecret('tenant-b', id),
       },
     ])(
       '$name throws not found and leaves the endpoint alone',

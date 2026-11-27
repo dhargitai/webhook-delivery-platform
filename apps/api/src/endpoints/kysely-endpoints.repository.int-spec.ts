@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createDatabase, type Database, type SealedSecret } from '@wdp/core';
 import { createTestDatabase, type TestDatabase } from '@wdp/core/testing';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { KyselyEndpointsRepository } from './kysely-endpoints.repository.js';
 
@@ -108,6 +108,144 @@ describe('KyselyEndpointsRepository (real Postgres)', () => {
         expect(endpoint).not.toHaveProperty('secret_ciphertext');
         expect(endpoint).not.toHaveProperty('signingSecret');
       }
+    });
+  });
+
+  describe('rotateSecret', () => {
+    const DAY_SECONDS = 86_400;
+
+    /** The current and previous sealed columns, and the end of the overlap. */
+    const secretColumns = (id: string) =>
+      db
+        .selectFrom('endpoints')
+        .select([
+          'secret_kek_id',
+          'secret_wrapped_dek',
+          'secret_iv',
+          'secret_ciphertext',
+          'secret_tag',
+          'previous_secret_kek_id',
+          'previous_secret_wrapped_dek',
+          'previous_secret_iv',
+          'previous_secret_ciphertext',
+          'previous_secret_tag',
+          'previous_secret_expires_at',
+        ])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+
+    const dbNow = async (): Promise<Date> => {
+      const { rows } = await sql<{
+        now: Date;
+      }>`select now() as now`.execute(db);
+      return rows[0]?.now ?? new Date(Number.NaN);
+    };
+
+    async function endpointWith(sealed: SealedSecret) {
+      const tenantId = await createTenant();
+      const id = randomUUID();
+      await repo.create(tenantId, id, input, sealed);
+      return { tenantId, id };
+    }
+
+    it('keeps the current secret as the previous one and stores the new one', async () => {
+      const old = aSealedSecret();
+      const next = aSealedSecret();
+      const { tenantId, id } = await endpointWith(old);
+
+      const result = await repo.rotateSecret(tenantId, id, next, DAY_SECONDS);
+
+      expect(result.kind).toBe('rotated');
+      expect(await secretColumns(id)).toMatchObject({
+        secret_kek_id: next.kekId,
+        secret_wrapped_dek: next.wrappedDek,
+        secret_iv: next.iv,
+        secret_ciphertext: next.ciphertext,
+        secret_tag: next.tag,
+        previous_secret_kek_id: old.kekId,
+        previous_secret_wrapped_dek: old.wrappedDek,
+        previous_secret_iv: old.iv,
+        previous_secret_ciphertext: old.ciphertext,
+        previous_secret_tag: old.tag,
+      });
+    });
+
+    it('ends the overlap after the given time, by the database clock, and reports when', async () => {
+      const { tenantId, id } = await endpointWith(aSealedSecret());
+
+      const result = await repo.rotateSecret(
+        tenantId,
+        id,
+        aSealedSecret(),
+        DAY_SECONDS,
+      );
+      const now = await dbNow();
+
+      const { previous_secret_expires_at: stored } = await secretColumns(id);
+      expect(result).toEqual({ kind: 'rotated', previousExpiresAt: stored });
+      const expected = now.getTime() + DAY_SECONDS * 1000;
+      expect(Math.abs((stored?.getTime() ?? 0) - expected)).toBeLessThan(5_000);
+    });
+
+    it('refuses a second rotation while the overlap lasts, and changes nothing', async () => {
+      const { tenantId, id } = await endpointWith(aSealedSecret());
+      await repo.rotateSecret(tenantId, id, aSealedSecret(), DAY_SECONDS);
+      const before = await secretColumns(id);
+
+      const result = await repo.rotateSecret(
+        tenantId,
+        id,
+        aSealedSecret(),
+        DAY_SECONDS,
+      );
+
+      expect(result).toEqual({
+        kind: 'in_progress',
+        until: before.previous_secret_expires_at,
+      });
+      expect(await secretColumns(id)).toEqual(before);
+    });
+
+    it('rotates again once the overlap has ended', async () => {
+      const second = aSealedSecret();
+      const { tenantId, id } = await endpointWith(aSealedSecret());
+      await repo.rotateSecret(tenantId, id, second, DAY_SECONDS);
+      await db
+        .updateTable('endpoints')
+        .set({
+          previous_secret_expires_at: sql<Date>`now() - interval '1 second'`,
+        })
+        .where('id', '=', id)
+        .execute();
+
+      const result = await repo.rotateSecret(
+        tenantId,
+        id,
+        aSealedSecret(),
+        DAY_SECONDS,
+      );
+
+      expect(result.kind).toBe('rotated');
+      expect((await secretColumns(id)).previous_secret_iv).toEqual(second.iv);
+    });
+
+    it("reports not found for an unknown id or another tenant's endpoint, and changes nothing", async () => {
+      const { id } = await endpointWith(aSealedSecret());
+      const other = await createTenant();
+      const before = await secretColumns(id);
+
+      expect(
+        await repo.rotateSecret(other, id, aSealedSecret(), DAY_SECONDS),
+      ).toEqual({ kind: 'not_found' });
+      expect(
+        await repo.rotateSecret(
+          other,
+          randomUUID(),
+          aSealedSecret(),
+          DAY_SECONDS,
+        ),
+      ).toEqual({ kind: 'not_found' });
+      expect(await secretColumns(id)).toEqual(before);
     });
   });
 

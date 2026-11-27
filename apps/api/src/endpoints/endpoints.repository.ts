@@ -16,6 +16,14 @@ export interface NewEndpoint {
   description: string | null;
 }
 
+/** How a secret rotation went. */
+export type SecretRotation =
+  /** The new secret is current; the old one signs until `previousExpiresAt`. */
+  | { kind: 'rotated'; previousExpiresAt: Date }
+  /** An earlier rotation's overlap lasts until `until`; nothing changed. */
+  | { kind: 'in_progress'; until: Date }
+  | { kind: 'not_found' };
+
 /**
  * Every method takes the tenant and only ever sees that tenant's rows, so an
  * id from another tenant behaves exactly like an id that does not exist.
@@ -32,6 +40,19 @@ export abstract class EndpointsRepository {
     input: NewEndpoint,
     signingSecret: SealedSecret,
   ): Promise<Endpoint>;
+
+  /**
+   * Makes `next` the current secret and keeps the current one as the previous
+   * secret for `overlapSeconds`, by the database clock. Refused while an
+   * earlier rotation's previous secret still signs, so no secret a receiver
+   * may rely on is ever dropped. Atomic: concurrent rotations cannot both win.
+   */
+  abstract rotateSecret(
+    tenantId: string,
+    id: string,
+    next: SealedSecret,
+    overlapSeconds: number,
+  ): Promise<SecretRotation>;
 
   /** In creation order. */
   abstract list(tenantId: string): Promise<Endpoint[]>;
