@@ -3,8 +3,12 @@ import type { EndpointRate } from '../endpoint-limiter.js';
 /** What the worker needs to call an endpoint. */
 export interface EndpointTarget {
   url: string;
-  /** Opened from its sealed form, in memory only. Never log it. */
-  signingSecret: string;
+  /**
+   * Every secret to sign with: the current one first, then the previous one
+   * while its rotation overlap lasts. Opened from their sealed form, in memory
+   * only. Never log them.
+   */
+  signingSecrets: readonly string[];
   status: 'active' | 'disabled';
   /**
    * The endpoint's own rate, for the limiter to merge over its defaults. A

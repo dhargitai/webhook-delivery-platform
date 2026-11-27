@@ -22,7 +22,10 @@ export {
   verifyApiKey,
   type GeneratedApiKey,
 } from './api-key.js';
-export { generateEndpointSecret } from './endpoint-secret.js';
+export {
+  generateEndpointSecret,
+  SECRET_ROTATION_OVERLAP_SECONDS,
+} from './endpoint-secret.js';
 export { KeyProvider, type WrappedKey } from './secrets/key-provider.js';
 export { parseKek } from './secrets/kek.js';
 export {

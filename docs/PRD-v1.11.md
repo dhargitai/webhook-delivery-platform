@@ -1,7 +1,7 @@
 **Status:** Approved
-**Date:** 2026-11-26
+**Date:** 2026-11-28
 **Author:** David Hargitai
-**Version:** 1.10
+**Version:** 1.11
 
 # PRD: Multi-tenant Webhook Delivery Platform (Portfolio Project 05, MVP slice)
 
@@ -367,7 +367,7 @@ Checkmarks show what is built (✅) and what is not yet (⬜). The per-task stat
 - ✅ Redis circuit breaker with half-open probe; token bucket; per-endpoint concurrency cap with the delay tier (the worker consults the breaker and the limiter before every call)
 - ✅ Sharded fresh lanes, separation of fresh and retry consumption priority
 - ✅ SSRF guard test suite
-- ⬜ Secret encryption and rotation
+- ✅ Secret encryption and rotation
 - ⬜ Load test with a noisy tenant and a hanging endpoint; recorded results
 
 **Validation:** isolation criterion met with numbers; breaker open and recover observed; SSRF suite green.

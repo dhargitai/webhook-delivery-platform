@@ -5,6 +5,7 @@ import { createDatabase, type Database } from '../db/database.js';
 import { generateEndpointSecret } from '../endpoint-secret.js';
 import type { SealedSecret, SecretOpener } from '../secrets/secret-cipher.js';
 import {
+  sealedPreviousSecretColumns,
   sealedSecretColumns,
   testCipher,
   testKek,
@@ -94,7 +95,7 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
 
     expect(await lookup.find(tenantId, id)).toEqual({
       url: 'https://hooks.acme.test/exact',
-      signingSecret: secret,
+      signingSecrets: [secret],
       status: 'active',
       // No override stored: the limiter's defaults apply.
       rate: {},
@@ -153,6 +154,83 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
     await expect(lookup.find(tenantId, row.id)).rejects.toThrow(/sealed/);
   });
 
+  describe('during a rotation overlap', () => {
+    const HOUR_MS = 3_600_000;
+
+    /** Gives an endpoint a previous secret that signs until `expiresAt`. */
+    async function addPreviousSecret(
+      tenantId: string,
+      id: string,
+      secret: string,
+      expiresAt: Date,
+    ): Promise<void> {
+      await db
+        .updateTable('endpoints')
+        .set(
+          await sealedPreviousSecretColumns(
+            cipher,
+            tenantId,
+            id,
+            secret,
+            expiresAt,
+          ),
+        )
+        .where('id', '=', id)
+        .execute();
+    }
+
+    it('returns the current secret first, then the previous one while it lasts', async () => {
+      const tenantId = await createTenant();
+      const current = generateEndpointSecret();
+      const previous = generateEndpointSecret();
+      const id = await addEndpoint(tenantId, { secret: current });
+      await addPreviousSecret(
+        tenantId,
+        id,
+        previous,
+        new Date(Date.now() + HOUR_MS),
+      );
+
+      const target = await lookup.find(tenantId, id);
+
+      expect(target?.signingSecrets).toEqual([current, previous]);
+    });
+
+    it('leaves the previous secret out once its overlap has ended', async () => {
+      const tenantId = await createTenant();
+      const current = generateEndpointSecret();
+      const id = await addEndpoint(tenantId, { secret: current });
+      await addPreviousSecret(
+        tenantId,
+        id,
+        generateEndpointSecret(),
+        new Date(Date.now() - HOUR_MS),
+      );
+
+      const target = await lookup.find(tenantId, id);
+
+      expect(target?.signingSecrets).toEqual([current]);
+    });
+
+    it('refuses an endpoint whose previous secret was tampered with', async () => {
+      const tenantId = await createTenant();
+      const id = await addEndpoint(tenantId);
+      await addPreviousSecret(
+        tenantId,
+        id,
+        generateEndpointSecret(),
+        new Date(Date.now() + HOUR_MS),
+      );
+      await db
+        .updateTable('endpoints')
+        .set({ previous_secret_tag: Buffer.alloc(16, 0xff) })
+        .where('id', '=', id)
+        .execute();
+
+      await expect(lookup.find(tenantId, id)).rejects.toThrow();
+    });
+  });
+
   it('returns the endpoint’s stored rate override', async () => {
     const tenantId = await createTenant();
     const id = await addEndpoint(tenantId, { ratePerSecond: 2.5, burst: 10 });
@@ -182,7 +260,7 @@ describe('KyselyEndpointTargetLookup (real Postgres)', () => {
     const a = await lookup.find(tenantId, first);
     const b = await lookup.find(tenantId, second);
 
-    expect(a?.signingSecret).not.toEqual(b?.signingSecret);
+    expect(a?.signingSecrets).not.toEqual(b?.signingSecrets);
   });
 
   it('returns a disabled endpoint as disabled, so the caller can skip it', async () => {

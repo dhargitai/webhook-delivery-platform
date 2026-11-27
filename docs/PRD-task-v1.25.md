@@ -1,8 +1,8 @@
 **Status:** Approved
-**Date:** 2026-11-26
+**Date:** 2026-11-28
 **Author:** David Hargitai
-**Version:** 1.24
-**Source PRD:** PRD-v1.10
+**Version:** 1.25
+**Source PRD:** PRD-v1.11
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
 
@@ -477,19 +477,19 @@ Fresh-lane consumers use prefetch 20 and the `retry.ready` consumer uses prefetc
 
 - [x] With retries backed up, fresh deliveries still meet the first-attempt target
 
-### Task 29: Secret rotation with overlap ⬜
+### Task 29: Secret rotation with overlap ✅
 
 **Original Story:** 5
 **Scope:** `api`, `worker`
 **Blocked by:** Tasks 10, 22
 
 **What to build:**
-Rotate an endpoint's secret with a 24 h overlap in which each request carries two signatures.
+Rotate an endpoint's secret with a 24 h overlap in which each request carries two signatures. Built as `POST /v1/endpoints/:id/secret-rotations` (a rotation is a resource, so no verb in the path), which returns `201 {secret, previous_secret_expires_at}`, the only time the new secret is shown. Migration 0008 adds one previous-secret slot to `endpoints`: five sealed columns (`previous_secret_kek_id`, `_wrapped_dek`, `_iv`, `_ciphertext`, `_tag`) and `previous_secret_expires_at`, with checks that keep it whole with its expiry or absent, and the sizes the cipher writes. `KyselyEndpointsRepository.rotateSecret` is one `UPDATE`: it moves the current sealed bytes into the previous columns without opening them (the AAD names the endpoint, not the slot), stores the new secret, and sets the expiry from the database clock, `now()` plus `SECRET_ROTATION_OVERLAP_SECONDS` (24 h, `@wdp/core`). It matches only a row with no live previous secret, so a second rotation during the overlap is refused with `409` (`SecretRotationInProgressError` in `@wdp/domain`, code `SECRET_ROTATION_IN_PROGRESS`, naming when the overlap ends) and changes nothing; the row lock makes a concurrent second rotation re-check that and be refused too, so no secret a receiver may rely on is dropped. The overlap cannot be ended early (that could come with Task 40's update route). In the worker, `EndpointTarget.signingSecret` became `signingSecrets` (current first): `KyselyEndpointTargetLookup` adds the previous secret while `previous_secret_expires_at > now()`, decided in SQL on every lookup, so the 60 s cache of opened secrets never stretches an overlap, and a previous secret that fails to open rejects like the current one. `DeliveryAttempt` signs with all of them, so the header is `v1,<new> v1,<old>` during the overlap. Not handled: an endpoint whose secret is still in plaintext cannot be rotated (the `endpoints_secret_one_form` check fails, a 500); Compose seals every row before the services start, and the worker refuses such rows anyway.
 
 **Acceptance Criteria:**
 
-- [ ] During the overlap, verification works with either secret
-- [ ] After the overlap, only the new secret is sent
+- [x] During the overlap, verification works with either secret
+- [x] After the overlap, only the new secret is sent
 
 ### Task 30: Isolation load test ⬜
 

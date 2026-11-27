@@ -7,6 +7,7 @@ export {
 } from './fake-event-store.js';
 export {
   sealedEndpointRow,
+  sealedPreviousSecretColumns,
   sealedSecretColumns,
   testCipher,
   testKek,

@@ -19,8 +19,10 @@ import {
 import {
   type CreatedEndpointResponse,
   type EndpointResponse,
+  type RotatedSecretResponse,
   toCreatedEndpointResponse,
   toEndpointResponse,
+  toRotatedSecretResponse,
 } from './endpoint.response.js';
 import { CreateEndpointPipe } from './create-endpoint.pipe.js';
 import { EndpointsService } from './endpoints.service.js';
@@ -66,6 +68,20 @@ export class EndpointsController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
     await this.endpoints.delete(tenantId, id);
+  }
+
+  /**
+   * Creates a rotation: the endpoint gets a new secret, and the old one keeps
+   * signing for the overlap. `409` while an earlier rotation's overlap lasts.
+   */
+  @Post(':id/secret-rotations')
+  async rotateSecret(
+    @CurrentTenant() tenantId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<RotatedSecretResponse> {
+    return toRotatedSecretResponse(
+      await this.endpoints.rotateSecret(tenantId, id),
+    );
   }
 
   /** Replaces the whole set, so repeating a request changes nothing. */

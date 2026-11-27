@@ -2,11 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import {
   generateEndpointSecret,
+  SECRET_ROTATION_OVERLAP_SECONDS,
   SecretCipher,
   secretAad,
   SsrfGuard,
 } from '@wdp/core';
-import { EndpointNotFoundError, UrlNotAllowedError } from '@wdp/domain';
+import {
+  EndpointNotFoundError,
+  SecretRotationInProgressError,
+  UrlNotAllowedError,
+} from '@wdp/domain';
 import {
   type Endpoint,
   EndpointsRepository,
@@ -17,6 +22,12 @@ import {
 export interface CreatedEndpoint {
   endpoint: Endpoint;
   secret: string;
+}
+
+/** A rotated secret, in the clear only here, and when the old one stops signing. */
+export interface RotatedSecret {
+  secret: string;
+  previousExpiresAt: Date;
 }
 
 @Injectable()
@@ -44,6 +55,30 @@ export class EndpointsService {
     const sealed = await this.cipher.seal(secret, secretAad(tenantId, id));
     const endpoint = await this.endpoints.create(tenantId, id, input, sealed);
     return { endpoint, secret };
+  }
+
+  /**
+   * Gives the endpoint a new secret. The old one keeps signing through the
+   * overlap, so the receiver can deploy the new one without dropping
+   * deliveries; a second rotation during the overlap is refused.
+   */
+  async rotateSecret(tenantId: string, id: string): Promise<RotatedSecret> {
+    const secret = generateEndpointSecret();
+    const sealed = await this.cipher.seal(secret, secretAad(tenantId, id));
+    const result = await this.endpoints.rotateSecret(
+      tenantId,
+      id,
+      sealed,
+      SECRET_ROTATION_OVERLAP_SECONDS,
+    );
+    switch (result.kind) {
+      case 'rotated':
+        return { secret, previousExpiresAt: result.previousExpiresAt };
+      case 'in_progress':
+        throw new SecretRotationInProgressError(result.until);
+      case 'not_found':
+        throw new EndpointNotFoundError(id);
+    }
   }
 
   list(tenantId: string): Promise<Endpoint[]> {

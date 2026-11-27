@@ -187,6 +187,76 @@ describe('database schema (real Postgres)', () => {
           insertWith({ ...sealed(), ...change }),
         ).rejects.toMatchObject({ code: '23514' });
       });
+
+      describe('previous signing secret', () => {
+        /** A well-formed previous secret and the end of its overlap. */
+        const previous = () => ({
+          previous_secret_kek_id: 'v1',
+          previous_secret_wrapped_dek: Buffer.alloc(60, 5),
+          previous_secret_iv: Buffer.alloc(12, 6),
+          previous_secret_ciphertext: Buffer.alloc(50, 7),
+          previous_secret_tag: Buffer.alloc(16, 8),
+          previous_secret_expires_at: new Date(Date.now() + 86_400_000),
+        });
+
+        async function insertWithPrevious(
+          columns: Record<string, string | Buffer | Date | null>,
+        ) {
+          const tenantId = await insertTenant();
+          const all = { ...sealed(), ...columns };
+          const names = Object.keys(all);
+          return pool.query(
+            `INSERT INTO endpoints (tenant_id, url, ${names.join(', ')})
+             VALUES ($1, $2, ${names.map((_, i) => `$${i + 3}`).join(', ')})`,
+            [tenantId, 'https://hooks.acme.test/in', ...Object.values(all)],
+          );
+        }
+
+        it('accepts a whole previous secret with its expiry', async () => {
+          await expect(insertWithPrevious(previous())).resolves.toMatchObject({
+            rowCount: 1,
+          });
+        });
+
+        it.each([
+          'previous_secret_kek_id',
+          'previous_secret_wrapped_dek',
+          'previous_secret_iv',
+          'previous_secret_ciphertext',
+          'previous_secret_tag',
+          'previous_secret_expires_at',
+        ])('rejects a previous secret missing %s', async (column) => {
+          await expect(
+            insertWithPrevious({ ...previous(), [column]: null }),
+          ).rejects.toMatchObject({
+            code: '23514',
+            constraint: 'endpoints_previous_secret_whole',
+          });
+        });
+
+        it.each([
+          {
+            name: 'an 11-byte IV',
+            change: { previous_secret_iv: Buffer.alloc(11) },
+          },
+          {
+            name: 'a 12-byte tag',
+            change: { previous_secret_tag: Buffer.alloc(12) },
+          },
+          {
+            name: 'a 59-byte wrapped DEK',
+            change: { previous_secret_wrapped_dek: Buffer.alloc(59) },
+          },
+          { name: 'an empty KEK id', change: { previous_secret_kek_id: '' } },
+        ])('rejects a previous secret with $name', async ({ change }) => {
+          await expect(
+            insertWithPrevious({ ...previous(), ...change }),
+          ).rejects.toMatchObject({
+            code: '23514',
+            constraint: 'endpoints_previous_secret_shape',
+          });
+        });
+      });
     });
 
     it.each(['0', '-1', 'Infinity', 'NaN'])(

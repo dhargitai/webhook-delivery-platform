@@ -137,7 +137,7 @@ describe('DeliveryAttempt', () => {
     lookup = new FakeLookup();
     lookup.targets.set('tenant-1/endpoint-1', {
       url: 'https://hooks.acme.test/in',
-      signingSecret: secret,
+      signingSecrets: [secret],
       status: 'active',
       rate: {},
     });
@@ -218,6 +218,35 @@ describe('DeliveryAttempt', () => {
         clock,
       ),
     ).toBe(false);
+  });
+
+  it('signs with every secret it is given, the current one first, during a rotation', async () => {
+    const previous = generateEndpointSecret();
+    lookup.targets.set('tenant-1/endpoint-1', {
+      url: 'https://hooks.acme.test/in',
+      signingSecrets: [secret, previous],
+      status: 'active',
+      rate: {},
+    });
+
+    await delivery.attempt(job);
+
+    const { headers, body } = onlySent();
+    const entries = (headers['webhook-signature'] ?? '').split(' ');
+    expect(entries).toHaveLength(2);
+    // Each entry on its own verifies with its own secret, in order, so a
+    // receiver on either secret accepts the request.
+    const verifies = (entry: string | undefined, key: string) =>
+      signatures.verify(
+        entry ?? '',
+        headers['webhook-id'] ?? '',
+        Number(headers['webhook-timestamp']),
+        body,
+        [key],
+        clock,
+      );
+    expect(verifies(entries[0], secret)).toBe(true);
+    expect(verifies(entries[1], previous)).toBe(true);
   });
 
   it('keeps the webhook id but takes a fresh timestamp and signature on a later attempt', async () => {
@@ -342,7 +371,7 @@ describe('DeliveryAttempt', () => {
   it('does not call a disabled endpoint', async () => {
     lookup.targets.set('tenant-1/endpoint-1', {
       url: 'https://hooks.acme.test/in',
-      signingSecret: secret,
+      signingSecrets: [secret],
       status: 'disabled',
       rate: {},
     });
@@ -476,7 +505,7 @@ describe('DeliveryAttempt', () => {
     it('does not consult the breaker for a disabled endpoint', async () => {
       lookup.targets.set('tenant-1/endpoint-1', {
         url: 'https://hooks.acme.test/in',
-        signingSecret: secret,
+        signingSecrets: [secret],
         status: 'disabled',
         rate: {},
       });
@@ -515,7 +544,7 @@ describe('DeliveryAttempt', () => {
     it('asks for the job’s endpoint, with the endpoint’s own rate', async () => {
       lookup.targets.set('tenant-1/endpoint-1', {
         url: 'https://hooks.acme.test/in',
-        signingSecret: secret,
+        signingSecrets: [secret],
         status: 'active',
         rate: { burst: 3 },
       });
@@ -578,7 +607,7 @@ describe('DeliveryAttempt', () => {
       await delivery.attempt(job);
       lookup.targets.set('tenant-1/endpoint-1', {
         url: 'https://hooks.acme.test/in',
-        signingSecret: secret,
+        signingSecrets: [secret],
         status: 'disabled',
         rate: {},
       });

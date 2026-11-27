@@ -3,6 +3,7 @@ import {
   EndpointNotFoundError,
   IdempotencyConflictError,
   RateLimitExceededError,
+  SecretRotationInProgressError,
   UrlNotAllowedError,
 } from '@wdp/domain';
 import { describe, expect, it } from 'vitest';
@@ -67,6 +68,22 @@ describe('toProblem', () => {
     expect(problem.body).toMatchObject({
       status: 404,
       code: 'ENDPOINT_NOT_FOUND',
+    });
+  });
+
+  it('maps a rotation still in its overlap to 409, saying when it ends', () => {
+    const problem = toProblem(
+      new SecretRotationInProgressError(new Date('2026-11-29T12:00:00.000Z')),
+    );
+
+    expect(problem.status).toBe(409);
+    expect(problem.body).toEqual({
+      type: 'about:blank',
+      title: 'Secret rotation in progress',
+      status: 409,
+      code: 'SECRET_ROTATION_IN_PROGRESS',
+      detail:
+        'the previous signing secret is in use until 2026-11-29T12:00:00.000Z',
     });
   });
 
