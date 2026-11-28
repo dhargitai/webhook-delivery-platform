@@ -1,0 +1,39 @@
+{
+  "run": {
+    "label": "two-workers-1128b",
+    "startedAt": "2026-11-28T08:34:30.185Z",
+    "durationSeconds": 120
+  },
+  "acceptedPerSecond": 619.9,
+  "noisyRateLimited": 33114,
+  "victimRateLimited": 0,
+  "failed": 0,
+  "victimDropped": 3029,
+  "noisyDropped": 2267,
+  "generatorMaxLagMs": 765,
+  "hangingLane": {
+    "count": 5156,
+    "p50": 27410,
+    "p95": 48505,
+    "p99": 50700,
+    "max": 52727
+  },
+  "otherLanes": {
+    "count": 56615,
+    "p50": 20337,
+    "p95": 31599,
+    "p99": 33743,
+    "max": 34044
+  },
+  "missing": 0,
+  "missingSample": [],
+  "verdict": {
+    "pass": false,
+    "reasons": [
+      "p99 on the hanging endpoint's lane is 50700 ms, above 5000 ms",
+      "p99 on the other lanes is 33743 ms, above 5000 ms",
+      "the generator fell 765 ms behind its schedule (over 250 ms), so the run measured the generator, not the platform",
+      "3029 victim events could not be sent: the API left too many requests unanswered"
+    ]
+  }
+}
