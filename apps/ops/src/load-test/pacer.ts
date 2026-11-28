@@ -88,3 +88,9 @@ function fire(
     );
   }
 }
+
+/** Wall-clock time from the monotonic `performance.now()`. */
+export const systemClock: PacerClock = {
+  now: () => performance.now(),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};

@@ -24,8 +24,17 @@ export interface FirstAttempt {
 
 export interface ReportInput {
   run: { label: string; startedAt: Date; durationSeconds: number };
-  /** `202`s of every tenant, the noisy one's included, and its `429`s. */
-  ingest: { accepted: number; rateLimited: number };
+  ingest: {
+    /** `202`s of every tenant, the noisy one's included. */
+    accepted: number;
+    noisyRateLimited: number;
+    /** A victim never should be: its rate is set under the ingest limit. */
+    victimRateLimited: number;
+    /** Victim sends answered with neither `202` nor `429`, or not answered. */
+    failed: number;
+  };
+  /** The pacers' worst lag behind schedule. */
+  generatorMaxLagMs: number;
   expected: readonly ExpectedDelivery[];
   firstAttempts: readonly FirstAttempt[];
 }
@@ -33,7 +42,10 @@ export interface ReportInput {
 export interface LoadReport {
   run: { label: string; startedAt: string; durationSeconds: number };
   acceptedPerSecond: number;
-  rateLimited: number;
+  noisyRateLimited: number;
+  victimRateLimited: number;
+  failed: number;
+  generatorMaxLagMs: number;
   hangingLane: LatencySummary;
   otherLanes: LatencySummary;
   missing: number;
@@ -100,9 +112,19 @@ export function buildReport(input: ReportInput): LoadReport {
       `${round(acceptedPerSecond)} accepted events/s, below ${MIN_ACCEPTED_PER_SECOND}`,
     );
   }
+  if (input.ingest.failed > 0) {
+    reasons.push(
+      `${input.ingest.failed} victim ${plural(input.ingest.failed, 'send', 'sends')} failed`,
+    );
+  }
+  if (input.ingest.victimRateLimited > 0) {
+    reasons.push(
+      `victims were rate limited ${input.ingest.victimRateLimited} ${plural(input.ingest.victimRateLimited, 'time', 'times')}`,
+    );
+  }
   if (missing.length > 0) {
     reasons.push(
-      `${missing.length} accepted ${missing.length === 1 ? 'delivery' : 'deliveries'} had no first attempt`,
+      `${missing.length} accepted ${plural(missing.length, 'delivery', 'deliveries')} had no first attempt`,
     );
   }
 
@@ -113,7 +135,10 @@ export function buildReport(input: ReportInput): LoadReport {
       durationSeconds: input.run.durationSeconds,
     },
     acceptedPerSecond: round(acceptedPerSecond),
-    rateLimited: input.ingest.rateLimited,
+    noisyRateLimited: input.ingest.noisyRateLimited,
+    victimRateLimited: input.ingest.victimRateLimited,
+    failed: input.ingest.failed,
+    generatorMaxLagMs: input.generatorMaxLagMs,
     hangingLane,
     otherLanes,
     missing: missing.length,
@@ -131,7 +156,10 @@ export function formatMarkdown(report: LoadReport): string {
     `Run "${report.run.label}", ${report.run.durationSeconds} s from ${report.run.startedAt}`,
     '',
     `Accepted events/s: ${report.acceptedPerSecond}`,
-    `Rate limited (429): ${report.rateLimited}`,
+    `Noisy tenant rate limited (429): ${report.noisyRateLimited}`,
+    `Victims rate limited (429): ${report.victimRateLimited}`,
+    `Failed victim sends: ${report.failed}`,
+    `Generator max lag: ${report.generatorMaxLagMs} ms`,
     `Missing deliveries: ${report.missing}`,
     '',
     '| Victim deliveries | Count | p50 ms | p95 ms | p99 ms | Max ms |',
@@ -143,6 +171,10 @@ export function formatMarkdown(report: LoadReport): string {
     ...report.verdict.reasons.map((reason) => `- ${reason}`),
     '',
   ].join('\n');
+}
+
+function plural(count: number, one: string, many: string): string {
+  return count === 1 ? one : many;
 }
 
 function round(value: number): number {

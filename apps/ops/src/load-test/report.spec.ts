@@ -45,7 +45,13 @@ function passingInput(overrides: Partial<ReportInput> = {}): ReportInput {
       startedAt: new Date(ACCEPTED_MS - 3_600_000),
       durationSeconds: 10,
     },
-    ingest: { accepted: 6_000, rateLimited: 42 },
+    ingest: {
+      accepted: 6_000,
+      noisyRateLimited: 42,
+      victimRateLimited: 0,
+      failed: 0,
+    },
+    generatorMaxLagMs: 3,
     expected: [a, b],
     firstAttempts: [attempt(a, 100), attempt(b, 200)],
     ...overrides,
@@ -65,7 +71,42 @@ describe('buildReport', () => {
     const report = buildReport(passingInput());
 
     expect(report.acceptedPerSecond).toBe(600);
-    expect(report.rateLimited).toBe(42);
+    expect(report.noisyRateLimited).toBe(42);
+    expect(report.generatorMaxLagMs).toBe(3);
+  });
+
+  it('fails when a victim send failed, since its event was never accepted', () => {
+    const report = buildReport(
+      passingInput({
+        ingest: {
+          accepted: 6_000,
+          noisyRateLimited: 42,
+          victimRateLimited: 0,
+          failed: 2,
+        },
+      }),
+    );
+
+    expect(report.verdict.reasons).toEqual([
+      expect.stringMatching(/2 victim sends failed/),
+    ]);
+  });
+
+  it('fails when a victim was rate limited, since the scenario let it exceed its limit', () => {
+    const report = buildReport(
+      passingInput({
+        ingest: {
+          accepted: 6_000,
+          noisyRateLimited: 42,
+          victimRateLimited: 1,
+          failed: 0,
+        },
+      }),
+    );
+
+    expect(report.verdict.reasons).toEqual([
+      expect.stringMatching(/victims were rate limited 1 time/),
+    ]);
   });
 
   it('fails when an accepted delivery never had a first attempt', () => {
@@ -139,7 +180,14 @@ describe('buildReport', () => {
     'needs at least 500 accepted events/s ($accepted in 10 s: pass $pass)',
     ({ accepted, pass }) => {
       const report = buildReport(
-        passingInput({ ingest: { accepted, rateLimited: 0 } }),
+        passingInput({
+          ingest: {
+            accepted,
+            noisyRateLimited: 0,
+            victimRateLimited: 0,
+            failed: 0,
+          },
+        }),
       );
 
       expect(report.verdict.pass).toBe(pass);
@@ -206,7 +254,10 @@ describe('formatMarkdown', () => {
     );
     expect(markdown).toMatch(/Other lanes \| 1 \| 200 \| 200 \| 200 \| 200/);
     expect(markdown).toMatch(/Accepted events\/s: 600/);
-    expect(markdown).toMatch(/Rate limited \(429\): 42/);
+    expect(markdown).toMatch(/Noisy tenant rate limited \(429\): 42/);
+    expect(markdown).toMatch(/Victims rate limited \(429\): 0/);
+    expect(markdown).toMatch(/Failed victim sends: 0/);
+    expect(markdown).toMatch(/Generator max lag: 3 ms/);
     expect(markdown).toMatch(/Verdict: PASS/);
   });
 
