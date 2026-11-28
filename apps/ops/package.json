@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@wdp/core": "workspace:*",
-    "kysely": "^0.29.8"
+    "kysely": "^0.29.8",
+    "mongodb": "^7.8.0"
   }
 }
