@@ -5,6 +5,11 @@ import { uuidV7Millis } from './uuid-v7-time.js';
 const SLA_P99_MS = 5_000;
 const MIN_ACCEPTED_PER_SECOND = 500;
 const MISSING_SAMPLE_SIZE = 10;
+/**
+ * How far the generator may fall behind its schedule. Beyond it the offered
+ * load was not the planned one, and the run measured the generator.
+ */
+const MAX_GENERATOR_LAG_MS = 250;
 
 /** One delivery a victim tenant's accepted event must produce. */
 export interface ExpectedDelivery {
@@ -110,6 +115,11 @@ export function buildReport(input: ReportInput): LoadReport {
   if (acceptedPerSecond < MIN_ACCEPTED_PER_SECOND) {
     reasons.push(
       `${round(acceptedPerSecond)} accepted events/s, below ${MIN_ACCEPTED_PER_SECOND}`,
+    );
+  }
+  if (input.generatorMaxLagMs > MAX_GENERATOR_LAG_MS) {
+    reasons.push(
+      `the generator fell ${input.generatorMaxLagMs} ms behind its schedule (over ${MAX_GENERATOR_LAG_MS} ms), so the run measured the generator, not the platform`,
     );
   }
   if (input.ingest.failed > 0) {

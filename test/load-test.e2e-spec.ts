@@ -103,11 +103,12 @@ describe('load test (e2e)', () => {
   });
 
   it('accounts for every victim delivery while a noisy tenant floods a hanging endpoint', async () => {
+    const client = new LoadApiClient(apiBase);
     const report = await runLoadTest(
       {
         db,
         attempts: mongo.db(mongoDbName).collection('attempts'),
-        api: new LoadApiClient(apiBase),
+        api: client,
         lanes: new LaneRouter(1),
         clock: systemClock,
       },
@@ -122,6 +123,7 @@ describe('load test (e2e)', () => {
         drainSeconds: 40,
       },
     );
+    client.close();
 
     // 2 victims x 10/s x 2 s, each event to one endpoint, all of them on the
     // hanging endpoint's only lane, and every one found in the attempt log.

@@ -92,6 +92,25 @@ describe('buildReport', () => {
     ]);
   });
 
+  it.each([
+    { lag: 250, pass: true },
+    { lag: 251, pass: false },
+  ])(
+    'treats a generator $lag ms behind schedule as pass: $pass',
+    ({ lag, pass }) => {
+      // Past that, the offered load was not the planned one: the run measured
+      // the load generator, not the platform.
+      const report = buildReport(passingInput({ generatorMaxLagMs: lag }));
+
+      expect(report.verdict.pass).toBe(pass);
+      if (!pass) {
+        expect(report.verdict.reasons).toEqual([
+          expect.stringMatching(/generator fell 251 ms behind/),
+        ]);
+      }
+    },
+  );
+
   it('fails when a victim was rate limited, since the scenario let it exceed its limit', () => {
     const report = buildReport(
       passingInput({

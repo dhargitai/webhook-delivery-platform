@@ -55,10 +55,10 @@ export async function runOpenLoop({
 
   for (let index = 0; index < total; index++) {
     const due = start + index * intervalMs;
-    const wait = due - clock.now();
-    if (wait > 0) {
-      await clock.sleep(wait);
-    }
+    // Always through the event loop, even when overdue: firing a backlog in
+    // one synchronous run would read no response meanwhile, then land every
+    // request at once as a burst the plan never offered.
+    await clock.sleep(Math.max(0, due - clock.now()));
     maxLagMs = Math.max(maxLagMs, clock.now() - due);
     inFlight.push(
       fire(send, index).catch(() => {
@@ -92,5 +92,10 @@ function fire(
 /** Wall-clock time from the monotonic `performance.now()`. */
 export const systemClock: PacerClock = {
   now: () => performance.now(),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  // A zero wait only yields (`setImmediate`, after pending I/O), rather than
+  // paying `setTimeout`'s 1 ms minimum on every overdue send.
+  sleep: (ms) =>
+    new Promise((resolve) =>
+      ms <= 0 ? setImmediate(resolve) : setTimeout(resolve, ms),
+    ),
 };

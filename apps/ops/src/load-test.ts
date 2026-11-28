@@ -22,6 +22,7 @@ async function main(): Promise<void> {
 
   const db = createDatabase(databaseUrl);
   const mongo = new MongoClient(env.mongoUrl);
+  const api = new LoadApiClient(env.apiUrl);
   try {
     process.stderr.write(
       `Load test "${args.label}": ${args.tenants} tenants at ${args.ratePerTenant}/s, noisy at ${args.noisyRate}/s, for ${args.durationSeconds} s...\n`,
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
       {
         db,
         attempts: mongo.db(env.mongoDb).collection('attempts'),
-        api: new LoadApiClient(env.apiUrl),
+        api,
         lanes: new LaneRouter(env.laneCount),
         clock: systemClock,
       },
@@ -40,6 +41,7 @@ async function main(): Promise<void> {
     process.stderr.write(`\n${formatMarkdown(report)}`);
     if (!report.verdict.pass) process.exitCode = 1;
   } finally {
+    api.close();
     await mongo.close();
     await db.destroy();
   }
