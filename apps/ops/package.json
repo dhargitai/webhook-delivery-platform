@@ -8,11 +8,13 @@
     "build": "rm -rf dist tsconfig.build.tsbuildinfo && tsc -p tsconfig.build.json",
     "migrate": "node dist/migrate.js",
     "seed": "node dist/seed.js",
-    "seal-secrets": "node dist/seal-secrets.js"
+    "seal-secrets": "node dist/seal-secrets.js",
+    "load-test": "node dist/load-test.js"
   },
   "dependencies": {
     "@wdp/core": "workspace:*",
     "kysely": "^0.29.8",
-    "mongodb": "^7.8.0"
+    "mongodb": "^7.8.0",
+    "zod": "^4.6.7"
   }
 }

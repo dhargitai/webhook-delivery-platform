@@ -193,6 +193,16 @@ The worker calls the mock receiver, and it can also be driven by hand. It answer
 
 `GET /stats` counts what arrived (including deliveries per `webhook-id`, so a retry shows as a repeat), `POST /stats/reset` clears it, and `GET /health` is its health check. Bad values are refused with a 400 that names the parameter. `docker compose down -v` removes the stack and its data.
 
+The isolation load test runs in the same network. It creates its own tenants (named after `--label`), sends 6 of them at 90 events/s each while a noisy tenant tries 400 events/s at an endpoint that never answers, for 2 minutes, then reads the attempt log and judges the run: every victim's p99 time to first attempt within 5 s, at least 500 accepted events/s, and no delivery missing. It prints the JSON report on stdout and a table on stderr, and exits 1 on a failed verdict:
+
+```bash
+docker compose run --rm load-test --label one-worker > one-worker.json
+docker compose up -d --scale worker=2          # the second run: two workers
+docker compose run --rm load-test --label two-workers > two-workers.json
+```
+
+`--duration`, `--tenants`, `--rate`, `--fanout`, `--noisy-rate` and `--drain` change the scenario.
+
 ## Scripts
 
 Run from the repository root.
@@ -204,6 +214,7 @@ Run from the repository root.
 | `bun run db:migrate`       | Applies the SQL migrations to `DATABASE_URL`. Run `bun run build` first; Compose does this for you                                                  |
 | `bun run db:seal-secrets`  | Seals the endpoint secrets still stored in plaintext (endpoints registered before encryption at rest), with `SECRETS_KEK_V1`. Idempotent; Compose's `migrate` runs it |
 | `bun run db:seed`          | Creates a tenant and prints an API key, `-- --tenant <name>` to name it. Run `bun run build` first; with Compose use `docker compose run --rm seed` |
+| `bun run --cwd apps/ops load-test -- --label <name>` | The isolation load test against a running stack (see [Full stack](#full-stack)). Run `bun run build` first; with Compose use `docker compose run --rm load-test --label <name>` |
 | `bun run lint`             | Runs oxlint with type-aware rules                                                                                                                   |
 | `bun run format`           | Formats sources with Prettier                                                                                                                       |
 | `bun run test`             | Runs unit tests (`*.spec.ts`)                                                                                                                       |
