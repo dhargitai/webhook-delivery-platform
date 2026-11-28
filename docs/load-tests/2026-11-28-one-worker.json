@@ -1,0 +1,37 @@
+{
+  "run": {
+    "label": "one-worker-1128b",
+    "startedAt": "2026-11-28T08:31:41.257Z",
+    "durationSeconds": 120
+  },
+  "acceptedPerSecond": 641.7,
+  "noisyRateLimited": 35797,
+  "victimRateLimited": 0,
+  "failed": 0,
+  "victimDropped": 0,
+  "noisyDropped": 0,
+  "generatorMaxLagMs": 198,
+  "hangingLane": {
+    "count": 16200,
+    "p50": 21949,
+    "p95": 24094,
+    "p99": 29204,
+    "max": 44303
+  },
+  "otherLanes": {
+    "count": 48600,
+    "p50": 524,
+    "p95": 5796,
+    "p99": 6255,
+    "max": 6650
+  },
+  "missing": 0,
+  "missingSample": [],
+  "verdict": {
+    "pass": false,
+    "reasons": [
+      "p99 on the hanging endpoint's lane is 29204 ms, above 5000 ms",
+      "p99 on the other lanes is 6255 ms, above 5000 ms"
+    ]
+  }
+}

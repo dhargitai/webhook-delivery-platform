@@ -165,7 +165,9 @@ services:
       TIME_SCALE: ${TIME_SCALE:-1}
       RETRY_MIN_DELAY_MS: ${RETRY_MIN_DELAY_MS:-0}
     ports:
-      - '3001:3001'
+      # A range, so `docker compose up --scale worker=2` (the load test's
+      # second run) gives each replica a host port instead of clashing.
+      - '3001-3002:3001'
     depends_on:
       postgres:
         condition: service_healthy
@@ -216,6 +218,29 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+
+  # Not started by `up` either: the isolation load test (Task 30). It creates
+  # its own tenants, floods the stack, then reads the attempt log, so it runs
+  # inside the network to reach the API, Postgres and Mongo by name:
+  #   docker compose run --rm load-test --label <name> > report.json
+  # The JSON report goes to stdout, the readable table to stderr.
+  load-test:
+    <<: *app
+    profiles: ['tools']
+    entrypoint: ['node', 'apps/ops/dist/load-test.js']
+    environment:
+      <<: *env
+      API_URL: http://api:3000
+      # The mock receiver as the worker reaches it.
+      RECEIVER_URL: http://mock-receiver:4000
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+      mock-receiver:
+        condition: service_healthy
 
 volumes:
   postgres-data:

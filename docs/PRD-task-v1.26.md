@@ -1,7 +1,7 @@
 **Status:** Approved
 **Date:** 2026-11-28
 **Author:** David Hargitai
-**Version:** 1.25
+**Version:** 1.26
 **Source PRD:** PRD-v1.11
 
 # Implementation Tasks: Multi-tenant Webhook Delivery Platform
@@ -495,15 +495,58 @@ Rotate an endpoint's secret with a 24 h overlap in which each request carries tw
 
 **Original Story:** 17
 **Scope:** tests, docs
-**Blocked by:** Tasks 27, 28
+**Blocked by:** Tasks 27, 28 (done); the rerun by Tasks 48, 49, 50
 
 **What to build:**
-Run a flooding tenant and a hanging endpoint while measuring other tenants, and record the results. The per-tenant ingest limit (100/s, burst 200) caps a single tenant, so the 500 events/s target needs at least 5 tenants.
+Run a flooding tenant and a hanging endpoint while measuring other tenants, and record the results. The per-tenant ingest limit (100/s, burst 200) caps a single tenant, so the 500 events/s target needs at least 5 tenants. Built as the ops `load-test` command (`docker compose run --rm load-test --label <name>`, a `tools`-profile service). It seeds fresh tenants named after the label (6 victims at 90 events/s, spread over enough endpoints that none passes 15/s, under its 20/s token bucket; a noisy tenant trying 400/s whose one endpoint hangs), registers their endpoints through the API, sends every tenant's load at once on an open-loop pacer, waits for each accepted victim delivery's first attempt, then deletes the run's endpoints. Latency is from the event's acceptance, the time in its UUIDv7 `event_id`, to its `attempt_no: 1` document in the attempt log, so jobs carry no new field; victims on the hanging endpoint's lane are summarised apart from the rest. The pacer yields before every send and caps each tenant's unanswered requests at 4 s of its rate, dropping and counting the rest, and a run fails its verdict on any victim drop, `429`, failed send or missing delivery, or a generator more than 250 ms behind schedule. The JSON report goes to stdout and a table to stderr. Results of 2026-11-28 (README, "Measured results"; raw reports in `docs/load-tests/`): with one worker, 641.7 accepted events/s, victim p99 6.3 s on other lanes and 29.2 s on the hanging endpoint's lane; with two workers, worse on every lane and 3,029 victim events dropped at ingest, so the limit is shared (Postgres near 100% CPU). Not met: the 5 s p99, for the causes Tasks 48 to 50 hold; rerun once they land.
 
 **Acceptance Criteria:**
 
 - [ ] Other tenants' p99 first-attempt latency stays within 5 s
-- [ ] Sustained ingest of at least 500 events/s is measured and recorded
+- [x] Sustained ingest of at least 500 events/s is measured and recorded
+
+### Task 48: Fix: a deferred delivery clogs its endpoint's lane forever ⬜
+
+**Original Story:** 17, 20
+**Scope:** `worker`, `core`, `messaging`
+**Blocked by:** None (on a `fix/` branch)
+
+**What to build:**
+While an endpoint's circuit is open, every delivery to it is re-parked in its lane's delay queue every 5 s without using an attempt (Task 24), and the circuit of an endpoint that never answers never closes. Its jobs therefore circulate forever, and each return lands on the same fresh lane, so the victims sharing it queue behind an ever-growing pile of deferrals: in Task 30's one-worker run their p99 was 29.2 s against 6.3 s on the other lanes. Bound how long, or how many times, a job may be deferred before the deferral counts as a failed attempt, so a permanently dead endpoint's deliveries move through the retry tiers and end in the DLQ like any other failure. The bound and where it is counted are decided with the user (it touches the PRD's "without consuming an attempt").
+
+**Acceptance Criteria:**
+
+- [ ] A delivery to an endpoint whose circuit stays open ends in the DLQ with its reason instead of circulating
+- [ ] A short outage still costs no attempt
+- [ ] Rerunning Task 30's one-worker scenario, the hanging endpoint's lane no longer trails the others
+
+### Task 49: Lane headroom beside a hanging endpoint ⬜
+
+**Original Story:** 17, 19
+**Scope:** `worker`, docs
+**Blocked by:** None
+
+**What to build:**
+The per-endpoint concurrency cap (20) equals the per-lane prefetch (20), so on a single worker one hanging endpoint's permitted calls fill its lane for the whole 10 s timeout and nothing else on that lane moves. `worker-limiter.int-spec.ts` passes only because it sets `WORKER_PREFETCH=25`. Choose with the user between a prefetch above the cap, a lower cap, or a documented minimum worker count; each changes a locked parameter or the deployment.
+
+**Acceptance Criteria:**
+
+- [ ] With the shipped defaults and the documented minimum deployment, a hanging endpoint leaves room on its lane for other endpoints
+- [ ] An integration test fails if the defaults let one endpoint fill a lane
+
+### Task 50: Profile the shared capacity under load ⬜
+
+**Original Story:** 17, 27
+**Scope:** `api`, `relay`, `dispatcher`, `worker`, Postgres
+**Blocked by:** None
+
+**What to build:**
+In Task 30 a second worker made every lane slower, and Postgres stayed near 100% CPU. A per-query profile of one run put about half of Postgres's statement time in ingest (the `events` insert, its tenant key check, and the API-key lookup made even for requests that are then refused), 14% in the dispatcher's subscription lookup and 17% in the worker's endpoint lookups, yet statement time came to only about a third of a core. Profile where the rest goes (a WAL flush per ingest commit is the first suspect), what a refused request costs the API, the relay's poll, and a single worker pinned near 100%, then pick the first fix with the user.
+
+**Acceptance Criteria:**
+
+- [ ] Each of the four costs above is measured, with how it was measured
+- [ ] The first fix is chosen and has its own task
 
 ### Phase 4: Dashboard, observability and demo
 
