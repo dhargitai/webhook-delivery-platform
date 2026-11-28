@@ -22,6 +22,12 @@ import {
 } from './setup.js';
 
 const DRAIN_POLL_MS = 1_000;
+/**
+ * A tenant's unanswered sends are capped at this many seconds of its rate;
+ * past it the API is not keeping up, and further sends are dropped and counted
+ * instead of piling up in the generator until it stalls.
+ */
+const OUTSTANDING_SECONDS = 4;
 
 export interface LoadTestDeps {
   db: Kysely<Database>;
@@ -93,6 +99,7 @@ async function loadAndJudge(
     const endpointsByType = groupByType(tenant.endpoints);
     return runOpenLoop({
       ratePerSecond: tenant.plan.ratePerSecond,
+      maxOutstanding: tenant.plan.ratePerSecond * OUTSTANDING_SECONDS,
       durationSeconds: options.durationSeconds,
       clock,
       send: async (index) => {
@@ -126,6 +133,7 @@ async function loadAndJudge(
       ? Promise.resolve(null)
       : runOpenLoop({
           ratePerSecond: noisy.plan.ratePerSecond,
+          maxOutstanding: noisy.plan.ratePerSecond * OUTSTANDING_SECONDS,
           durationSeconds: options.durationSeconds,
           clock,
           send: async () => {
@@ -137,8 +145,12 @@ async function loadAndJudge(
           },
         });
 
-  const runs = await Promise.all([...victimRuns, noisyRun]);
-  const generatorMaxLagMs = Math.max(0, ...runs.map((r) => r?.maxLagMs ?? 0));
+  const victimResults = await Promise.all(victimRuns);
+  const noisyResult = await noisyRun;
+  const generatorMaxLagMs = Math.max(
+    0,
+    ...[...victimResults, noisyResult].map((r) => r?.maxLagMs ?? 0),
+  );
 
   const firstAttempts = await drain(deps, {
     tenantIds: prepared.victims.map((tenant) => tenant.tenantId),
@@ -153,7 +165,11 @@ async function loadAndJudge(
       startedAt,
       durationSeconds: options.durationSeconds,
     },
-    ingest,
+    ingest: {
+      ...ingest,
+      victimDropped: victimResults.reduce((n, r) => n + r.dropped, 0),
+      noisyDropped: noisyResult?.dropped ?? 0,
+    },
     generatorMaxLagMs: Math.round(generatorMaxLagMs),
     expected,
     firstAttempts,

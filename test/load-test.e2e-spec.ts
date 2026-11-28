@@ -132,6 +132,7 @@ describe('load test (e2e)', () => {
     expect(report.otherLanes.count).toBe(0);
     expect(report.failed).toBe(0);
     expect(report.victimRateLimited).toBe(0);
+    expect(report.victimDropped).toBe(0);
     // 600 tries against a 100/s limit with a burst of 200.
     expect(report.noisyRateLimited).toBeGreaterThan(0);
     // The noisy tenant's accepted events count toward the ingest rate.

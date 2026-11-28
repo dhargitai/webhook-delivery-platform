@@ -50,6 +50,8 @@ function passingInput(overrides: Partial<ReportInput> = {}): ReportInput {
       noisyRateLimited: 42,
       victimRateLimited: 0,
       failed: 0,
+      victimDropped: 0,
+      noisyDropped: 0,
     },
     generatorMaxLagMs: 3,
     expected: [a, b],
@@ -83,6 +85,8 @@ describe('buildReport', () => {
           noisyRateLimited: 42,
           victimRateLimited: 0,
           failed: 2,
+          victimDropped: 0,
+          noisyDropped: 0,
         },
       }),
     );
@@ -111,6 +115,46 @@ describe('buildReport', () => {
     },
   );
 
+  it('fails when the generator had to drop victim sends', () => {
+    // The API could not take the victims' events: an ingest isolation
+    // failure that their latency, counted from acceptance, cannot show.
+    const report = buildReport(
+      passingInput({
+        ingest: {
+          accepted: 6_000,
+          noisyRateLimited: 42,
+          victimRateLimited: 0,
+          failed: 0,
+          victimDropped: 12,
+          noisyDropped: 300,
+        },
+      }),
+    );
+
+    expect(report.victimDropped).toBe(12);
+    expect(report.noisyDropped).toBe(300);
+    expect(report.verdict.reasons).toEqual([
+      expect.stringMatching(/12 victim events could not be sent/),
+    ]);
+  });
+
+  it("does not fail on the noisy tenant's dropped sends alone", () => {
+    const report = buildReport(
+      passingInput({
+        ingest: {
+          accepted: 6_000,
+          noisyRateLimited: 42,
+          victimRateLimited: 0,
+          failed: 0,
+          victimDropped: 0,
+          noisyDropped: 300,
+        },
+      }),
+    );
+
+    expect(report.verdict.pass).toBe(true);
+  });
+
   it('fails when a victim was rate limited, since the scenario let it exceed its limit', () => {
     const report = buildReport(
       passingInput({
@@ -119,6 +163,8 @@ describe('buildReport', () => {
           noisyRateLimited: 42,
           victimRateLimited: 1,
           failed: 0,
+          victimDropped: 0,
+          noisyDropped: 0,
         },
       }),
     );
@@ -205,6 +251,8 @@ describe('buildReport', () => {
             noisyRateLimited: 0,
             victimRateLimited: 0,
             failed: 0,
+            victimDropped: 0,
+            noisyDropped: 0,
           },
         }),
       );
@@ -277,6 +325,7 @@ describe('formatMarkdown', () => {
     expect(markdown).toMatch(/Victims rate limited \(429\): 0/);
     expect(markdown).toMatch(/Failed victim sends: 0/);
     expect(markdown).toMatch(/Generator max lag: 3 ms/);
+    expect(markdown).toMatch(/Dropped sends: victims 0, noisy tenant 0/);
     expect(markdown).toMatch(/Verdict: PASS/);
   });
 

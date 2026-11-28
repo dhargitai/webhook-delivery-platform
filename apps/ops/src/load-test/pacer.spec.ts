@@ -48,7 +48,7 @@ describe('runOpenLoop', () => {
     });
 
     expect(firedAt).toEqual([0, 100, 200, 300, 400, 500, 600, 700, 800, 900]);
-    expect(result).toEqual({ sent: 10, failed: 0, maxLagMs: 0 });
+    expect(result).toEqual({ sent: 10, dropped: 0, failed: 0, maxLagMs: 0 });
   });
 
   it('keeps to the schedule while earlier sends have not answered', async () => {
@@ -78,7 +78,12 @@ describe('runOpenLoop', () => {
     expect(finished).toBe(false);
 
     for (const release of releases) release();
-    await expect(run).resolves.toEqual({ sent: 10, failed: 0, maxLagMs: 0 });
+    await expect(run).resolves.toEqual({
+      sent: 10,
+      dropped: 0,
+      failed: 0,
+      maxLagMs: 0,
+    });
   });
 
   it('fires overdue sends at once, skipping none, and reports the lag', async () => {
@@ -96,7 +101,7 @@ describe('runOpenLoop', () => {
     });
 
     expect(firedAt).toEqual([0, 100, 200, 550, 550, 550, 600, 700, 800, 900]);
-    expect(result).toEqual({ sent: 10, failed: 0, maxLagMs: 250 });
+    expect(result).toEqual({ sent: 10, dropped: 0, failed: 0, maxLagMs: 250 });
   });
 
   it('yields to the event loop before every send, overdue ones included', async () => {
@@ -135,6 +140,51 @@ describe('runOpenLoop', () => {
     ]);
   });
 
+  it('drops a send while too many are unanswered, instead of queueing it', async () => {
+    // An API that cannot keep up would otherwise grow the generator's queue
+    // without bound, until its memory and garbage collection stall the pacer.
+    const clock = new FakeClock();
+    const fired: number[] = [];
+    const releases: (() => void)[] = [];
+
+    const run = runOpenLoop({
+      ratePerSecond: 10,
+      durationSeconds: 1,
+      maxOutstanding: 3,
+      clock,
+      send: (index) => {
+        fired.push(index);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      },
+    });
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    for (const release of releases) release();
+
+    expect(fired).toEqual([0, 1, 2]);
+    await expect(run).resolves.toEqual({
+      sent: 3,
+      dropped: 7,
+      failed: 0,
+      maxLagMs: 0,
+    });
+  });
+
+  it('sends again once an answer frees room', async () => {
+    const clock = new FakeClock();
+    const { firedAt, send } = recorder(clock);
+
+    const result = await runOpenLoop({
+      ratePerSecond: 10,
+      durationSeconds: 1,
+      maxOutstanding: 1,
+      send,
+      clock,
+    });
+
+    expect(firedAt).toHaveLength(10);
+    expect(result).toMatchObject({ sent: 10, dropped: 0 });
+  });
+
   it('counts a failed send and carries on', async () => {
     const clock = new FakeClock();
     const fired: number[] = [];
@@ -153,7 +203,7 @@ describe('runOpenLoop', () => {
     });
 
     expect(fired).toEqual([0, 1, 2, 3, 4]);
-    expect(result).toEqual({ sent: 5, failed: 2, maxLagMs: 0 });
+    expect(result).toEqual({ sent: 5, dropped: 0, failed: 2, maxLagMs: 0 });
   });
 
   it.each([

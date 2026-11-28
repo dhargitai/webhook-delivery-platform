@@ -10,10 +10,18 @@ export interface OpenLoopOptions {
   /** One request. Its outcome is the caller's to record; a rejection is only counted. */
   send: (index: number) => Promise<void>;
   clock: PacerClock;
+  /**
+   * Most sends left unanswered at once (unbounded by default). A send due
+   * while this many are open is dropped and counted, as load tools count
+   * dropped iterations, rather than queued in the generator's memory.
+   */
+  maxOutstanding?: number;
 }
 
 export interface OpenLoopResult {
   sent: number;
+  /** Sends due while `maxOutstanding` were open: offered, never sent. */
+  dropped: number;
   /** Sends that threw or rejected (network errors, not HTTP statuses). */
   failed: number;
   /**
@@ -36,6 +44,7 @@ export async function runOpenLoop({
   durationSeconds,
   send,
   clock,
+  maxOutstanding = Number.POSITIVE_INFINITY,
 }: OpenLoopOptions): Promise<OpenLoopResult> {
   for (const [name, value] of [
     ['ratePerSecond', ratePerSecond],
@@ -51,6 +60,8 @@ export async function runOpenLoop({
   const start = clock.now();
   const inFlight: Promise<void>[] = [];
   let failed = 0;
+  let dropped = 0;
+  let outstanding = 0;
   let maxLagMs = 0;
 
   for (let index = 0; index < total; index++) {
@@ -60,15 +71,26 @@ export async function runOpenLoop({
     // request at once as a burst the plan never offered.
     await clock.sleep(Math.max(0, due - clock.now()));
     maxLagMs = Math.max(maxLagMs, clock.now() - due);
+    if (outstanding >= maxOutstanding) {
+      dropped += 1;
+      continue;
+    }
+    outstanding += 1;
     inFlight.push(
-      fire(send, index).catch(() => {
-        failed += 1;
-      }),
+      fire(send, index).then(
+        () => {
+          outstanding -= 1;
+        },
+        () => {
+          outstanding -= 1;
+          failed += 1;
+        },
+      ),
     );
   }
 
   await Promise.all(inFlight);
-  return { sent: total, failed, maxLagMs };
+  return { sent: total - dropped, dropped, failed, maxLagMs };
 }
 
 /**

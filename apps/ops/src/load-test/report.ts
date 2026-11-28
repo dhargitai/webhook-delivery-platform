@@ -37,6 +37,9 @@ export interface ReportInput {
     victimRateLimited: number;
     /** Victim sends answered with neither `202` nor `429`, or not answered. */
     failed: number;
+    /** Sends the generator dropped while too many were unanswered. */
+    victimDropped: number;
+    noisyDropped: number;
   };
   /** The pacers' worst lag behind schedule. */
   generatorMaxLagMs: number;
@@ -50,6 +53,8 @@ export interface LoadReport {
   noisyRateLimited: number;
   victimRateLimited: number;
   failed: number;
+  victimDropped: number;
+  noisyDropped: number;
   generatorMaxLagMs: number;
   hangingLane: LatencySummary;
   otherLanes: LatencySummary;
@@ -122,6 +127,11 @@ export function buildReport(input: ReportInput): LoadReport {
       `the generator fell ${input.generatorMaxLagMs} ms behind its schedule (over ${MAX_GENERATOR_LAG_MS} ms), so the run measured the generator, not the platform`,
     );
   }
+  if (input.ingest.victimDropped > 0) {
+    reasons.push(
+      `${input.ingest.victimDropped} victim ${plural(input.ingest.victimDropped, 'event', 'events')} could not be sent: the API left too many requests unanswered`,
+    );
+  }
   if (input.ingest.failed > 0) {
     reasons.push(
       `${input.ingest.failed} victim ${plural(input.ingest.failed, 'send', 'sends')} failed`,
@@ -148,6 +158,8 @@ export function buildReport(input: ReportInput): LoadReport {
     noisyRateLimited: input.ingest.noisyRateLimited,
     victimRateLimited: input.ingest.victimRateLimited,
     failed: input.ingest.failed,
+    victimDropped: input.ingest.victimDropped,
+    noisyDropped: input.ingest.noisyDropped,
     generatorMaxLagMs: input.generatorMaxLagMs,
     hangingLane,
     otherLanes,
@@ -169,6 +181,7 @@ export function formatMarkdown(report: LoadReport): string {
     `Noisy tenant rate limited (429): ${report.noisyRateLimited}`,
     `Victims rate limited (429): ${report.victimRateLimited}`,
     `Failed victim sends: ${report.failed}`,
+    `Dropped sends: victims ${report.victimDropped}, noisy tenant ${report.noisyDropped}`,
     `Generator max lag: ${report.generatorMaxLagMs} ms`,
     `Missing deliveries: ${report.missing}`,
     '',
