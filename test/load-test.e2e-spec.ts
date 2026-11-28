@@ -138,5 +138,16 @@ describe('load test (e2e)', () => {
     expect(report.acceptedPerSecond).toBeGreaterThan(40 / 2);
     // Its deliveries really reached the hanging endpoint.
     expect(receiver.stats().hung).toBeGreaterThan(0);
+
+    // Torn down: no endpoint of the run is left, so the noisy tenant's jobs,
+    // re-parked forever while its circuit is open, are skipped and acked
+    // instead of loading the next run.
+    const left = await db
+      .selectFrom('endpoints')
+      .innerJoin('tenants', 'tenants.id', 'endpoints.tenant_id')
+      .select('endpoints.id')
+      .where('tenants.name', 'like', 'load-e2e-%')
+      .execute();
+    expect(left).toEqual([]);
   }, 90_000);
 });

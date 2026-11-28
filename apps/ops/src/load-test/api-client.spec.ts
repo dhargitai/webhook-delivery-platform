@@ -121,6 +121,32 @@ describe('LoadApiClient', () => {
     });
   });
 
+  it('deletes an endpoint', async () => {
+    const { api, client } = await setUp((_req, res) => {
+      res.writeHead(204).end();
+    });
+
+    await client.deleteEndpoint('whk_key', 'ep-1');
+
+    expect(api.seen).toEqual([
+      {
+        method: 'DELETE',
+        url: '/v1/endpoints/ep-1',
+        authorization: 'Bearer whk_key',
+        contentType: undefined,
+        body: undefined,
+      },
+    ]);
+  });
+
+  it('refuses a failed delete', async () => {
+    const { client } = await setUp((_req, res) => json(res, 404, {}));
+
+    await expect(client.deleteEndpoint('whk_key', 'ep-1')).rejects.toThrow(
+      /deleting endpoint ep-1: HTTP 404/,
+    );
+  });
+
   it('refuses a failed subscription', async () => {
     const { client } = await setUp((_req, res) => json(res, 404, {}));
 

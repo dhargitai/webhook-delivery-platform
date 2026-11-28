@@ -65,6 +65,16 @@ export class LoadApiClient {
     expectStatus(response, 200, `subscribing endpoint ${endpointId}`);
   }
 
+  /** Deletes an endpoint; the worker then skips and acks its queued jobs. */
+  async deleteEndpoint(apiKey: string, endpointId: string): Promise<void> {
+    const response = await this.call(
+      'DELETE',
+      `/v1/endpoints/${endpointId}`,
+      apiKey,
+    );
+    expectStatus(response, 204, `deleting endpoint ${endpointId}`);
+  }
+
   /**
    * Sends one event. Never throws: under load every outcome, a refused
    * connection included, is a result the run counts.
@@ -96,12 +106,17 @@ export class LoadApiClient {
   }
 
   private call(
-    method: 'POST' | 'PUT',
+    method: 'POST' | 'PUT' | 'DELETE',
     path: string,
     apiKey: string,
-    body: object,
+    body?: object,
   ): Promise<ApiResponse> {
-    const payload = JSON.stringify(body);
+    const payload = body === undefined ? '' : JSON.stringify(body);
+    const headers: http.OutgoingHttpHeaders = {
+      authorization: `Bearer ${apiKey}`,
+      'content-length': Buffer.byteLength(payload),
+    };
+    if (body !== undefined) headers['content-type'] = 'application/json';
     // Keeps any path prefix of the base URL.
     const url = new URL(
       `${this.base.pathname.replace(/\/+$/, '')}${path}`,
@@ -113,11 +128,7 @@ export class LoadApiClient {
         {
           method,
           agent: this.agent,
-          headers: {
-            authorization: `Bearer ${apiKey}`,
-            'content-type': 'application/json',
-            'content-length': Buffer.byteLength(payload),
-          },
+          headers,
         },
         (response) => {
           const chunks: Buffer[] = [];

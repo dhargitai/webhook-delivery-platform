@@ -15,7 +15,11 @@ import {
   planScenario,
   type ScenarioOptions,
 } from './scenario.js';
-import { type PreparedEndpoint, setUpScenario } from './setup.js';
+import {
+  type PreparedEndpoint,
+  type PreparedScenario,
+  setUpScenario,
+} from './setup.js';
 
 const DRAIN_POLL_MS = 1_000;
 
@@ -44,8 +48,37 @@ export async function runLoadTest(
   deps: LoadTestDeps,
   options: LoadTestOptions,
 ): Promise<LoadReport> {
-  const { api, clock } = deps;
   const prepared = await setUpScenario(deps, planScenario(options));
+  try {
+    return await loadAndJudge(deps, options, prepared);
+  } finally {
+    await tearDown(deps.api, prepared);
+  }
+}
+
+/**
+ * Deletes the run's endpoints. The noisy tenant's deliveries would otherwise
+ * stay re-parked forever while its circuit is open (a deferral uses no
+ * attempt), loading every run after this one; once their endpoint is gone the
+ * worker skips and acks them.
+ */
+async function tearDown(
+  api: LoadApiClient,
+  prepared: PreparedScenario,
+): Promise<void> {
+  for (const tenant of [prepared.noisy, ...prepared.victims]) {
+    for (const endpoint of tenant.endpoints) {
+      await api.deleteEndpoint(tenant.apiKey, endpoint.id);
+    }
+  }
+}
+
+async function loadAndJudge(
+  deps: LoadTestDeps,
+  options: LoadTestOptions,
+  prepared: PreparedScenario,
+): Promise<LoadReport> {
+  const { api, clock } = deps;
 
   const expected: ExpectedDelivery[] = [];
   const ingest = {
